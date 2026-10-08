@@ -100,8 +100,7 @@ Because the jitter is added after the cap, the last waits can reach 66 s. The to
 | Setting | Value | Why | Owner |
 |---|---|---|---|
 | Key scope | Per client: unique on (client_id, key) | Two clients can use the same key text without clashing. `client_id` is trusted, not verified. | ADR 005 |
-| Key retention | Forever for now; a separate key table with an expiry is the planned upgrade | Keeps "at most one job per client and key" true with no exceptions. Expiry is needed to run beyond tests. | ADR 005 |
-| Key length | 255 characters at most; missing or empty keys are refused with 400 | Keeps keys small and makes sure every submit can be deduplicated. | ADR 005 |
+| Key retention | Forever | Keeps "at most one job per client and key" true with no exceptions. | ADR 005 |
 | Lock timeout for a duplicate in progress | 2 seconds | If the first request's transaction hasn't finished in 2 s, the duplicate gets 409 and retries. | ADR 005 |
 | Response codes | 201 new job, 200 same key and payload, 422 same key with a different payload, 409 first request still in progress | Lets a client tell a retry from a mistake. | ADR 005 |
 

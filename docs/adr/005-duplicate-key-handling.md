@@ -9,7 +9,7 @@
 
 Clients retry. A request can time out after the job was already saved, or the connection can drop after the commit but before the response arrives. If the client sends the same request again, the engine must not create a second job.
 
-The engine needs a way to tell "the same request again" from "a new request that happens to look the same". It also has to decide what happens in three main cases (a few edge cases are in the Decision):
+The engine needs a way to tell "the same request again" from "a new request that happens to look the same". It also has to decide what happens in three cases:
 
 - the same key arrives with the same payload (a plain retry)
 - the same key arrives with a different payload (a client bug)
@@ -69,23 +69,14 @@ And two storage questions: who a key belongs to (its scope), and how long it is 
 
 ## Decision
 
-Start with A, and plan to move toward C later (see Upgrade path). The rules:
+Use A, with these rules:
 
 - A new job returns 201
 - Same key, same payload returns 200 with the original job
 - Same key, different payload returns 422 and changes nothing (compared by payload_hash, computed over a canonical form of the JSON so that key order and spacing don't matter)
 - Same key while the first request is still being saved returns 409. Postgres makes the second insert wait for the first transaction to finish. If the first has not finished after a short wait (a lock timeout of 2 s), the second request returns 409 and the client retries
 - Scope: per client. The key is unique per (client_id, key), so two clients can use the same key text without clashing
-- Retention, for now: kept forever, in the jobs table
-
-Edge cases:
-
-- A missing or empty `Idempotency-Key` or `client_id`, or a key longer than 255 characters, returns 400 and stores nothing. Clients should use random keys (for example UUIDs)
-- `payload_hash` covers the job type as well as the payload, so the same key with a different job type also returns 422
-- A submit rejected for an invalid payload stores nothing, so the key is still free for a corrected request
-- A request that fails before the commit stores nothing, so the retry is treated as new and returns 201
-- The same key and payload for a job that is waiting, queued or running returns 200 with the job in its current state
-- The same key and payload for a job that has already ended (succeeded, dead or rejected) also returns 200 with that job. A new job is not created. To run the work again, the client uses a new key, or an operator redrives a dead job
+- Retention: kept forever, in the jobs table
 
 ## Consequences
 
@@ -94,31 +85,16 @@ Edge cases:
 - client_id is trusted, not verified, because authentication is a non-goal. One client could send another's client_id, and in this version nothing would stop it.
 - The submit request does one INSERT ... ON CONFLICT DO NOTHING; if nothing was inserted, it reads the existing row, compares payload_hash, and returns 200 or 422.
 - A job that is waiting for approval also holds its key, so a retried submit returns 200 with that waiting job.
-- Security limits, because authentication is a non-goal. `client_id` is only a header, so anyone who can reach the API can send any `client_id`. That allows three things:
-  - reading another client's job: send their `client_id`, their key and the same payload, and the answer is 200 with their job
-  - key squatting: submit under a victim's `client_id` with a key the victim will use later, so the victim's real request gets 200 with the attacker's job (or 422 for a different payload)
-  - learning that a key exists, from a 422
-
-  All three need the attacker to know the key. Random keys (UUIDs) make that impractical unless a key leaks, and the API is treated as a trusted-network service. This is a known limit of the non-goal, not a claim that the design is safe on an open network. The real fix is authentication, with `client_id` taken from verified credentials instead of a header. The per-client scope then becomes a real boundary.
 
 ## Upgrade path
 
-Move to C: keys in their own small table with an expiry, so the system can run beyond tests.
-
-- The table holds the client, the key, the job, the `payload_hash` and an expiry time, with the unique constraint on (client_id, key). The submit inserts the key and the job in one transaction, as now
-- Finished jobs can then be archived or deleted, so the jobs table stays bounded
-- The expiry should count from when the job reaches a final state (for example 24 hours after), not from submit. A job that is queued, running or waiting for approval (which can take days) then never loses its key
-- The window must be longer than the longest time a client keeps retrying
-- The invariant weakens to "at most one job per client and key while the key exists". A request that reuses a key after it expires creates a new job and returns 201
-- Expired keys have to be deleted by something; the reaper is the natural place
-- The spec's invariant (section 4) and retention rule (section 9) would be rewritten when this happens
+- Move keys into their own small table, kept forever (not a cache, no expiry). Jobs can then be archived or deleted while the keys stay, so the invariant still holds and the jobs table stays bounded. This changes where the key lives, not what clients see.
 
 ## Revisit this decision if
 
-- The jobs table grows too large for the soak or load tests (move to C)
+- The jobs table grows too large for the soak or load tests
 - Clients can't be trusted to send their own client_id (needs authentication, a non-goal today)
 
 ## To verify before accepting
 
-- Checked in the PostgreSQL docs (2026-10-07): the page on index uniqueness checks says that when a conflicting row comes from an uncommitted transaction, the would-be inserter waits for that transaction to end and then checks again. The page for `lock_timeout` says it applies to waits for locks on tables, indexes, rows or other database objects.
-- Not stated directly in the docs: that `lock_timeout` cuts short this particular wait, and the exact result of `ON CONFLICT DO NOTHING` after the wait. Confirm both with a two-session test (session A inserts and holds the transaction open; session B inserts the same key with `lock_timeout` set to 2 s). That test should become an automated test in the project.
+- Confirm in the Postgres docs for INSERT (ON CONFLICT) that a second insert waits for an uncommitted conflicting insert to finish, and that lock_timeout applies to that wait. The 409 rule depends on both.

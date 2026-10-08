@@ -7,7 +7,7 @@ A background job engine built on Postgres, with worker leases, retries, fencing 
 **Design phase. No implementation yet.**
 
 - The spec is written ([docs/spec.md](docs/spec.md)).
-- 10 architecture decision records are written ([docs/adr](docs/adr/README.md)): 6 accepted, 4 proposed and under review.
+- 10 architecture decision records are written ([docs/adr](docs/adr/README.md)): 3 accepted, 7 proposed and under review.
 - Every number (lease, retries, targets, limits) is listed with its reasoning in [docs/metrics-and-settings.md](docs/metrics-and-settings.md).
 - Implementation starts with the database schema and the invariant checks (see the roadmap below).
 
@@ -42,13 +42,13 @@ Workers never talk to the database directly (ADR 002). A job moves through six s
 | ADR | Decision | Status |
 |---|---|---|
 | [001](docs/adr/001-postgres-as-queue-store.md) | Postgres as the queue store | Accepted |
-| [002](docs/adr/002-workers-call-api.md) | Workers call the API, not Postgres | Accepted |
-| [003](docs/adr/003-lease-and-heartbeat.md) | 30 s lease, 7.5 s heartbeat | Accepted |
+| [002](docs/adr/002-workers-call-api.md) | Workers call the API, not Postgres | Proposed |
+| [003](docs/adr/003-lease-and-heartbeat.md) | 30 s lease, 7.5 s heartbeat | Proposed |
 | [004](docs/adr/004-retry-backoff-and-jitter.md) | 8 attempts, exponential backoff with a 60 s cap and jitter | Proposed |
 | [005](docs/adr/005-duplicate-key-handling.md) | Per-client idempotency keys, kept forever | Proposed |
 | [006](docs/adr/006-approval-placement-and-timeout.md) | Approval is a gate before the handler; timeouts escalate, never reject | Accepted |
 | [007](docs/adr/007-lease-expiry-requeue.md) | Lease expiry is retried with backoff, like a failure | Proposed |
-| [008](docs/adr/008-durability.md) | Single node, `synchronous_commit` on | Accepted |
+| [008](docs/adr/008-durability.md) | Single node, `synchronous_commit` on | Proposed |
 | [009](docs/adr/009-fencing-token-and-redrive.md) | The attempt number is the fencing token | Accepted |
 | [010](docs/adr/010-ui-scope.md) | Operator page built on the public API | Proposed |
 
@@ -66,7 +66,7 @@ The correctness rules are written as invariants in [spec section 4](docs/spec.md
 ## Roadmap
 
 - [x] Spec
-- [x] Architecture decision records, drafted (6 of 10 accepted)
+- [x] Architecture decision records, drafted (3 of 10 accepted)
 - [ ] Review and accept the remaining ADRs
 - [ ] `schema.sql` (jobs table with constraints) and `invariants.sql` (the zero-row queries)
 - [ ] API server: submit, claim, heartbeat, report

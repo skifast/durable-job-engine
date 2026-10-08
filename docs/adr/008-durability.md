@@ -1,6 +1,6 @@
 # ADR 008: Durability level
 
-**Status:** Accepted (2026-10-07)  
+**Status:** Proposed  
 **Date:** 2026-10-06  
 **Spec sections:** 3 (durability), 4 (no job is lost), 12 (chaos tests)  
 **Depends on:** ADR 001 (Postgres)  
@@ -73,6 +73,6 @@ Use A: a single Postgres node with the default settings (synchronous_commit on, 
 - Losing a disk or machine becomes unacceptable (add C, which also needs failover)
 - Commit latency, not the claim query, turns out to limit throughput (consider B only for job types where losing a job is acceptable, and say so in the spec)
 
-## References
+## To verify before accepting
 
-- Checked against the PostgreSQL docs on 2026-10-07 (Write-Ahead Log settings). With `synchronous_commit` set to off, the docs give the maximum delay before a commit is safe against a crash as three times `wal_writer_delay`, which is 200 ms by default (about 0.6 s). They also say that, unlike turning off `fsync`, this cannot make the database inconsistent: a crash can lose recent commits, and the state is as if those transactions had been cleanly aborted.
+- Confirm the synchronous_commit and wal_writer_delay behavior (the "about three times wal_writer_delay" loss window) in the Postgres docs under Write-Ahead Log settings.

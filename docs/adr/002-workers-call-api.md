@@ -1,6 +1,6 @@
 # ADR 002: Workers talk to the API server, not to Postgres directly
 
-**Status:** Accepted (2026-10-07)  
+**Status:** Proposed  
 **Date:** 2026-10-06  
 **Spec sections:** 6 (transitions T6-T13), 7 (components), 8 (retry policy)  
 **Depends on:** ADR 001 (Postgres as the queue store)  

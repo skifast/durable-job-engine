@@ -1,6 +1,6 @@
 # ADR 003: Lease length and heartbeat interval
 
-**Status:** Accepted (2026-10-07)  
+**Status:** Proposed  
 **Date:** 2026-10-06  
 **Spec sections:** 6 (T6, T7, T12, T13), 7 (worker, reaper), 11 (failure modes)  
 **Depends on:** ADR 001 (Postgres), ADR 002 (workers call the API)  

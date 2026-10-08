@@ -288,10 +288,8 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 - A duplicate submit (same key, same payload) returns 200 with the original job
 - The same key with a different payload is rejected with 422; nothing changes. A hash of the payload (payload_hash) is stored with the key to detect this
 - A duplicate submitted while the first request is still being processed returns 409. Mechanically: the second insert waits for the first transaction to finish; if the first hasn't finished within a lock timeout of 2 s, the second request returns 409 (ADR 005)
-- A missing or empty Idempotency-Key or client_id, or a key longer than 255 characters, returns 400 and stores nothing. payload_hash covers the job type and the payload
-- The same key and payload for a job that has already ended (succeeded, dead or rejected) returns 200 with that job; a new run needs a new key, or an operator redrive
 - Key scope: per client. A key is unique per (client_id, key). The client sends a client_id with each request (for example an X-Client-Id header). It is trusted, not authenticated, because authentication is a non-goal
-- Key retention: keys are kept forever (simplest), so the "at most one job per client and idempotency key" invariant holds as written. The keys live in the jobs table for now. The planned next step is a separate key table with an expiry (ADR 005)
+- Key retention: keys are kept forever (simplest), so the "at most one job per client and idempotency key" invariant holds as written. The keys live in the jobs table
 
 ## 10. Handler contract
 
@@ -357,13 +355,13 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 One page each: context, options with tradeoffs, decision, consequences. See [the ADR index](adr/README.md) for the full list and statuses.
 
 1. [Postgres as the queue store](adr/001-postgres-as-queue-store.md) (Accepted): Postgres, with jobs claimed using `SELECT ... FOR UPDATE SKIP LOCKED`.
-2. [Workers talk to the API server, not to Postgres directly](adr/002-workers-call-api.md) (Accepted): Workers call `/claim`, `/heartbeat` and `/report` on the API server.
-3. [Lease length and heartbeat interval](adr/003-lease-and-heartbeat.md) (Accepted): 30 s lease, 7.5 s heartbeat.
+2. [Workers talk to the API server, not to Postgres directly](adr/002-workers-call-api.md) (Proposed): Workers call `/claim`, `/heartbeat` and `/report` on the API server.
+3. [Lease length and heartbeat interval](adr/003-lease-and-heartbeat.md) (Proposed): 30 s lease, 7.5 s heartbeat.
 4. [Retry curve and jitter](adr/004-retry-backoff-and-jitter.md) (Proposed): 8 attempts, 2 s base doubling, 60 s cap (182 s total waiting), 0-10% jitter.
 5. [Duplicate-key handling, key scope and retention](adr/005-duplicate-key-handling.md) (Proposed): Per-client scope, keys kept forever; 200 for a duplicate, 422 for a different payload, 409 while in progress.
 6. [Approval placement and timeout](adr/006-approval-placement-and-timeout.md) (Accepted): Gate before the handler; on timeout, escalate (flag) instead of reject.
 7. [What happens when a lease expires](adr/007-lease-expiry-requeue.md) (Proposed): Backoff, same as failures.
-8. [Durability level](adr/008-durability.md) (Accepted): Single node, default `synchronous_commit`.
+8. [Durability level](adr/008-durability.md) (Proposed): Single node, default `synchronous_commit`.
 9. [Fencing token and redrive](adr/009-fencing-token-and-redrive.md) (Accepted): The attempt number is the fencing token; redrive sets a higher `max_attempts` and never resets `attempt`.
 10. [UI scope](adr/010-ui-scope.md) (Proposed): Operator page (list, detail, approve, reject, redrive) built only on the public API, no login.
 
