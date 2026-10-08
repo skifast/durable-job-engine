@@ -1,0 +1,22 @@
+# Environment and secrets
+.env
+.env.*
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Local databases and data
+pgdata/
+*.sqlite
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
