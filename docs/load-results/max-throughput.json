@@ -1,0 +1,119 @@
+{
+  "scenario": "max-throughput",
+  "config": {
+    "handler": "noop",
+    "step_duration": "30s",
+    "step_rates_per_s": [
+      200,
+      400,
+      800,
+      1200,
+      1600,
+      2400,
+      3200,
+      4800
+    ],
+    "workers": 10
+  },
+  "verdicts": [
+    {
+      "name": "every acknowledged job is in the table",
+      "pass": true,
+      "detail": "0 of 198002 missing"
+    },
+    {
+      "name": "no client gave up on a submit",
+      "pass": true,
+      "detail": "0 gave up"
+    },
+    {
+      "name": "every job finished after the drain",
+      "pass": true,
+      "detail": "0 unfinished after 1 s"
+    },
+    {
+      "name": "every job succeeded",
+      "pass": true,
+      "detail": "198002 of 198002"
+    },
+    {
+      "name": "invariant views return zero rows",
+      "pass": true,
+      "detail": "map[]"
+    }
+  ],
+  "data": {
+    "environment": {
+      "cpu": "Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz",
+      "fsync": "on",
+      "go": "go1.27.1",
+      "logical_cpus": "16",
+      "memory_bytes": "17179869184",
+      "note": "the harness, the engine, the workers and Postgres all share this one machine",
+      "os": "darwin/amd64",
+      "os_version": "26.6.2",
+      "postgres": "postgres (PostgreSQL) 16.15 (Homebrew)",
+      "shared_buffers": "128MB",
+      "synchronous_commit": "on",
+      "workers": "10"
+    },
+    "reported": "highest sustained rate: 1600 jobs/s completed (the empty handler, 10 workers, one Postgres, everything on one machine). Not pass/fail.",
+    "steps": [
+      {
+        "target_rate_per_s": 200,
+        "submit_rate_per_s": 200.01763816872113,
+        "completed_per_s": 199.88429307660866,
+        "queued_at_end": 4,
+        "queued_at_start": 0,
+        "start_latency_p95_ms": 97.219,
+        "sustained": true
+      },
+      {
+        "target_rate_per_s": 400,
+        "submit_rate_per_s": 400.01360923634587,
+        "completed_per_s": 399.746933496855,
+        "queued_at_end": 12,
+        "queued_at_start": 4,
+        "start_latency_p95_ms": 93.222,
+        "sustained": true
+      },
+      {
+        "target_rate_per_s": 800,
+        "submit_rate_per_s": 800.0051708600887,
+        "completed_per_s": 799.5718347258728,
+        "queued_at_end": 12,
+        "queued_at_start": 0,
+        "start_latency_p95_ms": 18.703,
+        "sustained": true
+      },
+      {
+        "target_rate_per_s": 1200,
+        "submit_rate_per_s": 1199.9800388598635,
+        "completed_per_s": 1199.9133751539187,
+        "queued_at_end": 2,
+        "queued_at_start": 0,
+        "start_latency_p95_ms": 37.16,
+        "sustained": true
+      },
+      {
+        "target_rate_per_s": 1600,
+        "submit_rate_per_s": 1599.906375772089,
+        "completed_per_s": 1599.7730502407746,
+        "queued_at_end": 0,
+        "queued_at_start": 0,
+        "start_latency_p95_ms": 386.792,
+        "sustained": true
+      },
+      {
+        "target_rate_per_s": 2400,
+        "submit_rate_per_s": 2399.818458388206,
+        "completed_per_s": 2183.9711182606798,
+        "queued_at_end": 6473,
+        "queued_at_start": 0,
+        "start_latency_p95_ms": 2580.747,
+        "sustained": false
+      }
+    ],
+    "wall_clock_seconds": 187.481512702
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "scenario": "backlog",
+  "config": {
+    "backlog_rows": 100000,
+    "claims_each": 300
+  },
+  "verdicts": [
+    {
+      "name": "100k rows were queued while measuring",
+      "pass": true,
+      "detail": "100000 queued"
+    },
+    {
+      "name": "claim p95 with 100k queued is within 2x of the claim p95 with one due job",
+      "pass": true,
+      "detail": "0.8 ms vs 2 x 0.9 ms = 1.7 ms (one client); ten clients at once: p95 1.8 ms"
+    },
+    {
+      "name": "invariant view returns zero rows",
+      "pass": true,
+      "detail": "0 violations"
+    }
+  ],
+  "data": {
+    "claim_100k_queue_one_client": {
+      "n": 300,
+      "mean_ms": 0.705,
+      "p50_ms": 0.689,
+      "p95_ms": 0.794,
+      "p99_ms": 0.882,
+      "max_ms": 2.011
+    },
+    "claim_100k_queue_ten_clients": {
+      "n": 1500,
+      "mean_ms": 1.51,
+      "p50_ms": 1.295,
+      "p95_ms": 1.768,
+      "p99_ms": 11.559,
+      "max_ms": 19.904
+    },
+    "claim_empty_queue_204": {
+      "n": 300,
+      "mean_ms": 0.391,
+      "p50_ms": 0.356,
+      "p95_ms": 0.546,
+      "p99_ms": 0.855,
+      "max_ms": 2.492
+    },
+    "claim_one_due_job": {
+      "n": 300,
+      "mean_ms": 0.737,
+      "p50_ms": 0.714,
+      "p95_ms": 0.864,
+      "p99_ms": 0.959,
+      "max_ms": 1.91
+    },
+    "environment": {
+      "cpu": "Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz",
+      "fsync": "on",
+      "go": "go1.27.1",
+      "logical_cpus": "16",
+      "memory_bytes": "17179869184",
+      "note": "the harness, the engine, the workers and Postgres all share this one machine",
+      "os": "darwin/amd64",
+      "os_version": "26.6.2",
+      "postgres": "postgres (PostgreSQL) 16.15 (Homebrew)",
+      "shared_buffers": "128MB",
+      "synchronous_commit": "on",
+      "workers": "0"
+    },
+    "fill_seconds": 3.532483923,
+    "queued_rows_before_measuring": 100000,
+    "wall_clock_seconds": 5.292613564
+  }
+}

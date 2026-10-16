@@ -128,6 +128,8 @@ Table storage settings (starting values, set in `db/schema.sql`; the 30-minute s
 
 ## 8. How each number gets checked
 
+Results of these checks: [load-test-results.md](load-test-results.md).
+
 | What is checked | How |
 |---|---|
 | Throughput and start latency | Load test, 5 minutes, with the 100 ms handler. Record p95 start latency. |

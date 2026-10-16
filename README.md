@@ -4,7 +4,7 @@ A background job engine built on Postgres, with worker leases, retries, fencing 
 
 ## Status
 
-**The design is done and the database layer is written and tested. The API server (every call in docs/api.md), the reaper and the worker are written and tested; the operator page and the load, soak and chaos tests are not started.**
+**The design is done and the database layer is written and tested. The API server (every call in docs/api.md), the reaper and the worker are written and tested; the load, soak and chaos tests have run ([results](docs/load-test-results.md)); the operator page is not started.**
 
 - The spec is written ([docs/spec.md](docs/spec.md)).
 - 13 architecture decision records are written and accepted ([docs/adr](docs/adr/README.md)).
@@ -79,7 +79,7 @@ The correctness rules are written as invariants in [spec section 4](docs/spec.md
 - [x] Worker and handler contract ([ADR 014](docs/adr/014-worker-and-handler-design.md)): handlers, heartbeats, time limit, lost lease, drain on shutdown, and the demo handlers
 - [x] Reaper: takes back expired leases (T12, T13) and escalates overdue approvals (T5), every 5 s, up to 100 jobs of each kind per pass, one transaction per job
 - [ ] Operator page
-- [ ] Load, soak and chaos tests, with results written up
+- [x] Load, soak and chaos tests, with results written up ([results](docs/load-test-results.md), harness in `cmd/loadtest`)
 
 ## How this is being built
 
@@ -132,6 +132,7 @@ The engine speaks plain HTTP. Put it behind a TLS proxy for anything beyond loca
 cmd/
   engine/                    the API server, with the reaper running inside it
   worker/                    claims jobs and runs the demo handlers
+  loadtest/                  the load, soak and chaos test harness (starts its own Postgres, engine and workers)
   jobkeys/                   create, list and revoke API keys (needs database access)
 internal/
   api/                       HTTP handlers, authentication, the error shape from docs/api.md

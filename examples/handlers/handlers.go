@@ -19,6 +19,7 @@ func All() map[string]worker.Handler {
 	return map[string]worker.Handler{
 		"noop":        Noop,
 		"sleep":       Sleep,
+		"sleep_long":  Sleep, // the same handler; its job type has a longer time limit (used by the lease tests)
 		"flaky":       Flaky,
 		"always_fail": AlwaysFail,
 		"crash":       Crash,
@@ -26,8 +27,15 @@ func All() map[string]worker.Handler {
 	}
 }
 
+// startedAt is the result of Noop and Sleep: when the handler began. The load tests
+// subtract the job's created_at from it to get the start latency (the harness and the
+// workers run on one machine, so the clocks agree).
+func startedAt() map[string]string {
+	return map[string]string{"started_at": time.Now().UTC().Format(time.RFC3339Nano)}
+}
+
 // Noop does nothing and succeeds at once. The empty handler of the load test.
-func Noop(context.Context, worker.Job) (any, error) { return nil, nil }
+func Noop(context.Context, worker.Job) (any, error) { return startedAt(), nil }
 
 // Sleep waits for payload.ms milliseconds (default 100), the 100 ms handler of the load test.
 // It stops early if it is cancelled.
@@ -39,9 +47,10 @@ func Sleep(ctx context.Context, job worker.Job) (any, error) {
 			return nil, worker.Permanent(errors.New("payload must be an object like {\"ms\": 100}"))
 		}
 	}
+	res := startedAt()
 	select {
 	case <-time.After(time.Duration(p.MS) * time.Millisecond):
-		return map[string]int{"slept_ms": p.MS}, nil
+		return res, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}

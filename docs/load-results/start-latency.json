@@ -1,0 +1,114 @@
+{
+  "scenario": "start-latency-idle",
+  "config": {
+    "jobs": 300,
+    "spacing": "random 100-300 ms",
+    "workers": 10
+  },
+  "verdicts": [
+    {
+      "name": "every acknowledged job is in the table",
+      "pass": true,
+      "detail": "0 of 300 missing"
+    },
+    {
+      "name": "no client gave up on a submit",
+      "pass": true,
+      "detail": "0 gave up after retrying"
+    },
+    {
+      "name": "every job finished after the drain",
+      "pass": true,
+      "detail": "0 unfinished"
+    },
+    {
+      "name": "every job succeeded (none dead)",
+      "pass": true,
+      "detail": "succeeded 300 of 300 acked, dead 0"
+    },
+    {
+      "name": "one row per key (no duplicates)",
+      "pass": true,
+      "detail": "300 rows for 300 acked keys"
+    },
+    {
+      "name": "invariant views return zero rows",
+      "pass": true,
+      "detail": "map[]"
+    },
+    {
+      "name": "start latency p95 \u003c= 250 ms",
+      "pass": true,
+      "detail": "p50 53 ms, p95 100 ms, p99 104 ms, max 483 ms over 300 jobs"
+    }
+  ],
+  "data": {
+    "environment": {
+      "cpu": "Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz",
+      "fsync": "on",
+      "go": "go1.27.1",
+      "logical_cpus": "16",
+      "memory_bytes": "17179869184",
+      "note": "the harness, the engine, the workers and Postgres all share this one machine",
+      "os": "darwin/amd64",
+      "os_version": "26.6.2",
+      "postgres": "postgres (PostgreSQL) 16.15 (Homebrew)",
+      "shared_buffers": "128MB",
+      "synchronous_commit": "on",
+      "workers": "10"
+    },
+    "summary": {
+      "submitted": 300,
+      "acked": 300,
+      "gave_up": 0,
+      "client_retries": 0,
+      "submit_latency": {
+        "n": 300,
+        "mean_ms": 3.384,
+        "p50_ms": 3.5,
+        "p95_ms": 4.634,
+        "p99_ms": 7.011,
+        "max_ms": 8.815
+      },
+      "start_latency_all": {
+        "n": 300,
+        "mean_ms": 54.995,
+        "p50_ms": 52.698,
+        "p95_ms": 100.253,
+        "p99_ms": 104.162,
+        "max_ms": 482.784
+      },
+      "start_latency_first_attempt": {
+        "n": 300,
+        "mean_ms": 54.995,
+        "p50_ms": 52.698,
+        "p95_ms": 100.253,
+        "p99_ms": 104.162,
+        "max_ms": 482.784
+      },
+      "completion_latency": {
+        "n": 300,
+        "mean_ms": 55.533,
+        "p50_ms": 53.308,
+        "p95_ms": 100.86,
+        "p99_ms": 104.782,
+        "max_ms": 483.459
+      },
+      "states": {
+        "succeeded": 300
+      },
+      "jobs_with_more_than_one_attempt": 0,
+      "lease_expired_entries": 0,
+      "submit_rate_per_s": 5.005267833422638,
+      "completion_rate_per_s_steady": 5.005267833422638,
+      "completion_rate_per_s_worst_10s_window": 4.5,
+      "drain_s": 0.003695366,
+      "unfinished_after_drain": 0,
+      "acked_jobs_missing_from_table": 0,
+      "rows_in_table_for_run": 300,
+      "invariant_violations": {},
+      "max_queued_seen": 0
+    },
+    "wall_clock_seconds": 59.999878925
+  }
+}

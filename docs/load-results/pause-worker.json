@@ -1,0 +1,57 @@
+{
+  "scenario": "pause-worker",
+  "config": {
+    "pause": "until the job runs on another worker",
+    "workers": 2
+  },
+  "verdicts": [
+    {
+      "name": "another worker took the job over",
+      "pass": true,
+      "detail": "after 36.6 s"
+    },
+    {
+      "name": "the late report is refused with 409 lease_lost",
+      "pass": true,
+      "detail": "409 {\"error\":{\"code\":\"lease_lost\",\"message\":\"This worker no longer holds the lease for this attempt.\",\"details\":{\"state\":\"running\"}}}"
+    },
+    {
+      "name": "the resumed worker was stopped by the fence and no report of the old attempt was accepted",
+      "pass": true,
+      "detail": "its own late report was refused (409); accepted report in its log: false"
+    },
+    {
+      "name": "the job finished once, on attempt 2, with one lease_expired entry",
+      "pass": true,
+      "detail": "[{Key:pw-1 State:succeeded Attempt:2 Created:2026-10-15 21:43:08.772957 -0600 MDT Finished:2026-10-15 21:44:05.767848 -0600 MDT StartedAt:2026-10-15 21:43:45.76677 -0600 MDT ErrorKinds:[lease_expired]}]"
+    },
+    {
+      "name": "the stored result is the new attempt's, not the late one",
+      "pass": true,
+      "detail": "{\"started_at\": \"2026-10-16T03:43:45.76677Z\"}"
+    },
+    {
+      "name": "invariant view returns zero rows",
+      "pass": true,
+      "detail": "0 violations"
+    }
+  ],
+  "data": {
+    "environment": {
+      "cpu": "Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz",
+      "fsync": "on",
+      "go": "go1.27.1",
+      "logical_cpus": "16",
+      "memory_bytes": "17179869184",
+      "note": "the harness, the engine, the workers and Postgres all share this one machine",
+      "os": "darwin/amd64",
+      "os_version": "26.6.2",
+      "postgres": "postgres (PostgreSQL) 16.15 (Homebrew)",
+      "shared_buffers": "128MB",
+      "synchronous_commit": "on",
+      "workers": "2"
+    },
+    "paused_worker": "worker-1",
+    "wall_clock_seconds": 57.308499286
+  }
+}
