@@ -4,7 +4,7 @@ A background job engine built on Postgres, with worker leases, retries, fencing 
 
 ## Status
 
-**The design is done and the database layer is written and tested. The API server (every call in docs/api.md), the reaper and the worker are written and tested; the load, soak and chaos tests have run ([results](docs/load-test-results.md)); the operator page is not started.**
+**The design is done and the database layer is written and tested. The API server (every call in docs/api.md), the reaper and the worker are written and tested; the load, soak and chaos tests have run ([results](docs/load-test-results.md)); and the operator page is written and tested. All roadmap items are done.**
 
 - The spec is written ([docs/spec.md](docs/spec.md)).
 - 13 architecture decision records are written and accepted ([docs/adr](docs/adr/README.md)).
@@ -56,6 +56,7 @@ Workers never talk to the database directly (ADR 002). A job moves through six s
 | [012](docs/adr/012-implementation-language.md) | Go for the API server, worker and reaper | Accepted |
 | [013](docs/adr/013-authentication-api-keys.md) | API keys for every caller, with roles (client, worker, operator) | Accepted |
 | [014](docs/adr/014-worker-and-handler-design.md) | Worker and handler design: classify by wrapping errors, time limit in the work item, stuck handler makes the worker exit | Accepted |
+| [015](docs/adr/015-operator-page-build.md) | Operator page: plain HTML and JavaScript embedded in the engine and served under /ui/, untrusted text shown as plain text only | Accepted |
 
 ## Targets
 
@@ -71,14 +72,14 @@ The correctness rules are written as invariants in [spec section 4](docs/spec.md
 ## Roadmap
 
 - [x] Spec
-- [x] Architecture decision records (13, all accepted)
+- [x] Architecture decision records (15, all accepted)
 - [x] `schema.sql` (jobs table with constraints and triggers), `invariants.sql` (the zero-row queries) and their tests
 - [x] API contract ([docs/api.md](docs/api.md))
 - [x] API server, first part: authentication, submit, read one job, claim, heartbeat, report, health check, and the `jobkeys` tool for API keys
 - [x] API server, second part: list jobs (with cursor paging), approve, reject, redrive
 - [x] Worker and handler contract ([ADR 014](docs/adr/014-worker-and-handler-design.md)): handlers, heartbeats, time limit, lost lease, drain on shutdown, and the demo handlers
 - [x] Reaper: takes back expired leases (T12, T13) and escalates overdue approvals (T5), every 5 s, up to 100 jobs of each kind per pass, one transaction per job
-- [ ] Operator page
+- [x] Operator page ([ADR 015](docs/adr/015-operator-page-build.md), [how to use and test it](docs/operator-page.md)): lists by state, one job, approve, reject, redrive; plain HTML and JavaScript served by the engine at `/ui/`
 - [x] Load, soak and chaos tests, with results written up ([results](docs/load-test-results.md), harness in `cmd/loadtest`)
 
 ## How this is being built
@@ -95,6 +96,7 @@ export TEST_DATABASE_URL='postgres://postgres:dev@localhost:5432/postgres'
 
 go mod tidy      # first time only: downloads the dependencies and writes go.sum
 go test ./...    # each test builds its own empty database from db/schema.sql
+node --test internal/ui/test/*.test.mjs   # the operator page's logic (needs Node 20 or newer)
 ```
 
 The tests need a real Postgres on purpose: the database enforces the rules (ADR 011), so a mock would hide the thing being tested. After each API test the invariant views (`db/invariants.sql`) are checked and must return zero rows.
@@ -124,6 +126,8 @@ WORKER_KEY=<the worker key> go run ./cmd/worker              # ENGINE_URL defaul
 
 and submit a job with `"type": "sleep"` and `"payload": {"ms": 300}`. A worker stops cleanly on Ctrl-C (a running handler gets 30 s to finish). If a handler ignores its cancellation the worker exits with status 2 and needs to be restarted; the `stuck` demo type shows this.
 
+The operator page is at `http://localhost:8080/ui/` (the engine's `/` sends you there). It asks for an operator key: `go run ./cmd/jobkeys create -name ops-alice -role operator`. See [docs/operator-page.md](docs/operator-page.md).
+
 The engine speaks plain HTTP. Put it behind a TLS proxy for anything beyond local use ([ADR 013](docs/adr/013-authentication-api-keys.md)).
 
 ## Repository layout
@@ -137,6 +141,7 @@ cmd/
 internal/
   api/                       HTTP handlers, authentication, the error shape from docs/api.md
   worker/                    the handler type, the API client and the run loop (heartbeats, time limit, shutdown)
+  ui/                        the operator page (plain HTML and JavaScript, embedded in the engine), its Node tests and its browser check
   reaper/                    the 5-second loop that calls the store's reaper functions
   store/                     all the SQL; the only package that talks to Postgres
   retry/                     the backoff delay from ADR 004

@@ -33,6 +33,16 @@ func (a *API) healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /whoami
+// ---------------------------------------------------------------------------
+
+// whoami tells a caller which key it is using. The operator page shows it, because the key's
+// name is what gets recorded as decided_by (ADR 015).
+func (a *API) whoami(w http.ResponseWriter, r *http.Request, caller store.Key) {
+	writeJSON(w, http.StatusOK, map[string]string{"name": caller.Name, "role": string(caller.Role)})
+}
+
+// ---------------------------------------------------------------------------
 // POST /jobs
 // ---------------------------------------------------------------------------
 

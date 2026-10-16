@@ -1,0 +1,1 @@
+{"job_types": {"plain": {}, "gated": {"needs_approval": true, "approval_window": "1h"}, "one_try": {"max_attempts": 1}, "wire_payment": {"needs_approval": true, "approval_window": "1h", "max_attempts": 3}}}

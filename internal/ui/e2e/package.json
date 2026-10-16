@@ -1,0 +1,7 @@
+{
+  "name": "operator-page-browser-check",
+  "private": true,
+  "type": "module",
+  "description": "Drives Chrome through the operator page. Run by hand; see docs/operator-page.md.",
+  "dependencies": { "playwright-core": "1.49.1" }
+}

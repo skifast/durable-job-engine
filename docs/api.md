@@ -277,6 +277,19 @@ Allowed only from `dead`. Sets the new `max_attempts`, clears `finished_at`, rec
 - 404 `not_found`
 - 409 `not_dead`
 
+## Who am I
+
+`GET /whoami` (any valid key: client, worker or operator)
+
+- 200: `{ "name": "ops-alice", "role": "operator" }`. `name` is the key's name, the value recorded as `client_id`, `lease_owner` or `decided_by`
+- 401 `unauthorized`
+
+The operator page uses it at sign-in (ADR 015).
+
+## Operator page
+
+`GET /ui/` and the files under it (`/ui/app.mjs`, `/ui/style.css` and so on) are the operator page (ADR 015). They need no key. Every response carries a Content-Security-Policy header and `X-Frame-Options: DENY`. `GET /` redirects to `/ui/`. The page itself calls only the endpoints in this document.
+
 ## Health
 
 `GET /healthz` (no key). 200 `{ "status": "ok" }` when the engine can run a query on Postgres, otherwise 503 `{ "status": "database_unavailable" }`.

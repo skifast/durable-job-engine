@@ -17,6 +17,7 @@ import (
 
 	"github.com/skifast/durable-job-engine/internal/config"
 	"github.com/skifast/durable-job-engine/internal/store"
+	"github.com/skifast/durable-job-engine/internal/ui"
 )
 
 const (
@@ -39,6 +40,11 @@ type API struct {
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.healthz)
+	mux.HandleFunc("GET /whoami", a.auth(a.whoami, store.RoleClient, store.RoleWorker, store.RoleOperator))
+	// The operator page: static files that need no key (ADR 015).
+	mux.Handle("GET /ui/", ui.Handler())
+	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/", http.StatusFound) })
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/", http.StatusFound) })
 	mux.HandleFunc("POST /jobs", a.auth(a.submit, store.RoleClient))
 	mux.HandleFunc("GET /jobs/{id}", a.auth(a.getJob, store.RoleClient, store.RoleOperator))
 	mux.HandleFunc("GET /jobs", a.auth(a.listJobs, store.RoleClient, store.RoleOperator))
