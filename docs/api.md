@@ -105,11 +105,12 @@ The reaper has no endpoint. It runs inside the engine and does T5 (escalate), T1
   "type": "send_invoice",
   "payload": { "invoice_id": 1234 },
   "attempt": 3,
-  "lease_expires_at": "2026-10-09T20:16:00.123Z"
+  "lease_expires_at": "2026-10-09T20:16:00.123Z",
+  "handler_time_limit_ms": 60000
 }
 ```
 
-`attempt` is the fencing token. The worker sends it back on every heartbeat and report.
+`attempt` is the fencing token. The worker sends it back on every heartbeat and report. `handler_time_limit_ms` is the job type's handler time limit from the engine's job-types file; the worker cancels the handler when it passes (ADR 014). If the type is no longer in the file, it is the 60 s default.
 
 ## Submit a job
 

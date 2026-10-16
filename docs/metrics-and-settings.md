@@ -38,6 +38,10 @@ Defined in spec section 3. Tested in the load and soak runs (spec section 12).
 | Missed heartbeats survived | 2 in a row | A heartbeat every H seconds on a lease of L seconds survives m misses when (m + 1) x H < L. Here 3 x 7.5 = 22.5 s, which is below 30 s. A third miss would put the next beat at 30 s, too late. | ADR 003 |
 | Poll interval | 100 ms | An idle worker asks for a job ten times a second. The longest a job waits for the next poll is 100 ms, which fits inside the 250 ms start-latency target. | ADR 002 |
 | Reaper interval | 5 seconds | How often the reaper looks for expired leases and overdue approvals. It adds directly to crash-recovery time. | Spec section 7, ADR 003 |
+| Stuck grace | 5 seconds | How long a cancelled handler gets to return before the worker exits. Long enough for a handler to close a connection, short enough that a stuck worker does not hold a job for long. | ADR 014 |
+| Drain window | 30 seconds (adjustable) | How long a worker lets a running handler finish after SIGTERM. Equal to one lease length; most handlers (default limit 60 s) that are nearly done will finish inside it. | ADR 014 |
+| Worker HTTP timeout | 10 seconds per request | Longer than any normal API call, shorter than the 30 s lease. | ADR 014 |
+| Report retry | up to 30 seconds | One lease length. After that the reaper has taken over and a report would be refused anyway. | ADR 014 |
 | Worker concurrency | 1 job at a time per worker | Keeps heartbeats and cancellation simple. Throughput comes from running more workers. | Spec section 7 |
 
 ### Worked example: a worker crashes mid-job

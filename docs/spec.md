@@ -269,7 +269,7 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 - run one handler at a time
 - call /heartbeat every 7.5 seconds while it runs (with a 30 second lease it can miss two in a row before losing the job)
 - report the outcome through /report. The report is accepted only if this worker still holds the lease for that attempt (same lease_owner and attempt) at the time of the report; otherwise nothing changes
-- cancel its handler if it can't renew the lease for longer than the lease length, or if the handler passes its time limit
+- cancel its handler if it can't renew the lease for longer than the lease length, or if the handler passes its time limit. The limit comes in the work item. A handler that does not stop within 5 s of being cancelled makes the worker exit (ADR 014)
 
 ### Operator page should
 
@@ -383,6 +383,7 @@ One page each: context, options with tradeoffs, decision, consequences. See [the
 11. [Schema: error history and enforced transitions](adr/011-schema-error-history-and-enforced-transitions.md) (Accepted): The error history is its own table; CHECK constraints and triggers make the database refuse state changes not listed in section 6.
 12. [Implementation language](adr/012-implementation-language.md) (Accepted): Go for the API server, worker and reaper.
 13. [Authentication with API keys](adr/013-authentication-api-keys.md) (Accepted): One API key per client, worker and operator, each with a role; client_id, lease_owner and decided_by come from the key.
+14. [Worker and handler design](adr/014-worker-and-handler-design.md) (Accepted): Handlers return (result, error) and classify by wrapping; the time limit travels in the work item; a stuck handler makes the worker exit; shutdown drains for 30 s; a missing handler is a retryable failure.
 
 Other settings (recorded in the ADR that uses them): see [metrics and settings](metrics-and-settings.md).
 

@@ -19,5 +19,6 @@ An architecture decision record (ADR) is a short document about one design decis
 | [011](011-schema-error-history-and-enforced-transitions.md) | Schema: error history and enforced transitions | Accepted | Error history in its own table; CHECK constraints plus triggers refuse illegal changes |
 | [012](012-implementation-language.md) | Implementation language | Accepted | Go for the API server, worker and reaper |
 | [013](013-authentication-api-keys.md) | Authentication with API keys | Accepted | One key per client, worker and operator, each with a role |
+| [014](014-worker-and-handler-design.md) | Worker and handler design | Accepted | Handlers return (result, error); time limit in the work item; stuck handler makes the worker exit; shutdown drains for 30 s |
 
 Related: [spec](../spec.md) · [metrics and settings](../metrics-and-settings.md)
