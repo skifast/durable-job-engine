@@ -17,13 +17,14 @@ import (
 // All returns the handlers by job type name.
 func All() map[string]worker.Handler {
 	return map[string]worker.Handler{
-		"noop":        Noop,
-		"sleep":       Sleep,
-		"sleep_long":  Sleep, // the same handler; its job type has a longer time limit (used by the lease tests)
-		"flaky":       Flaky,
-		"always_fail": AlwaysFail,
-		"crash":       Crash,
-		"stuck":       Stuck,
+		"noop":           Noop,
+		"needs_approval": Noop, // waits for an operator (see its job type); once approved it does what noop does
+		"sleep":          Sleep,
+		"sleep_long":     Sleep, // the same handler; its job type has a longer time limit (used by the lease tests)
+		"flaky":          Flaky,
+		"always_fail":    AlwaysFail,
+		"crash":          Crash,
+		"stuck":          Stuck,
 	}
 }
 
