@@ -6,6 +6,8 @@
 //	JOB_TYPES_FILE   path to the job-type JSON file (required)
 //	LISTEN_ADDR      address to listen on (default :8080)
 //
+// The engine also runs the reaper (every 5 s, up to 100 jobs of each kind per pass).
+//
 // The engine speaks plain HTTP. Run it behind a TLS proxy, or API keys cross the
 // network in the clear (ADR 013).
 package main
@@ -24,6 +26,7 @@ import (
 
 	"github.com/skifast/durable-job-engine/internal/api"
 	"github.com/skifast/durable-job-engine/internal/config"
+	"github.com/skifast/durable-job-engine/internal/reaper"
 	"github.com/skifast/durable-job-engine/internal/store"
 )
 
@@ -60,7 +63,17 @@ func run(log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	a := &api.API{Store: store.New(pool), Config: cfg, Log: log}
+	st := store.New(pool)
+
+	// The reaper runs in this process. It stops when ctx is cancelled, and we wait
+	// for it below so a pass is not cut off halfway through a job.
+	reaperDone := make(chan struct{})
+	go func() {
+		defer close(reaperDone)
+		(&reaper.Reaper{Store: st, Log: log}).Run(ctx)
+	}()
+
+	a := &api.API{Store: st, Config: cfg, Log: log}
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           a.Handler(),
@@ -80,6 +93,8 @@ func run(log *slog.Logger) error {
 		log.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx) // lets requests in progress finish
+		err := srv.Shutdown(shutdownCtx) // lets requests in progress finish
+		<-reaperDone
+		return err
 	}
 }

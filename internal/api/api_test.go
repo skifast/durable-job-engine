@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skifast/durable-job-engine/internal/api"
@@ -780,9 +779,8 @@ func TestReportFencing(t *testing.T) {
 	}
 	want(t, "still running", e.job(id)["state"], "running")
 
-	// A late report from a worker that lost the job: the reaper (not written yet) would have
-	// requeued it with a lease_expired entry; the test makes the same change by hand.
-	e.simulateLeaseExpiry(id, 1)
+	// A late report from a worker that lost the job: the reaper requeues it with a lease_expired entry.
+	e.expireLease(id)
 	r := e.report("w1", id, 1, "success", nil)
 	want(t, "late success", r.status, 409)
 	want(t, "late success code", r.errCode(), "lease_lost")
@@ -808,20 +806,16 @@ func TestReportFencing(t *testing.T) {
 	want(t, "repeat of the real success", again.json()["replayed"], true)
 }
 
-// simulateLeaseExpiry does what the reaper will do (T12): record a lease_expired entry
-// and requeue the job. It turns triggers off for this transaction because it writes the state change by hand.
-func (e *env) simulateLeaseExpiry(id string, attempt int) {
+// expireLease makes a running job's lease run out and lets the real reaper take it back
+// (T12). A running -> running update is the same shape as a heartbeat, so the triggers allow it.
+func (e *env) expireLease(id string) {
 	e.t.Helper()
 	ctx := context.Background()
-	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO job_errors (job_id, attempt, kind, message) VALUES ($1, $2, 'lease_expired', 'lease expired')`, id, attempt); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `UPDATE jobs SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL, run_at = now() WHERE id = $1`, id)
-		return err
-	})
-	if err != nil {
+	if _, err := e.pool.Exec(ctx, `UPDATE jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, id); err != nil {
 		e.t.Fatal(err)
+	}
+	if n, err := e.store.ReapExpiredLeases(ctx, 100); err != nil || n != 1 {
+		e.t.Fatalf("reaper took back %d jobs, err %v; want 1", n, err)
 	}
 }
 

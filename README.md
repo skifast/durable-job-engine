@@ -4,7 +4,7 @@ A background job engine built on Postgres, with worker leases, retries, fencing 
 
 ## Status
 
-**The design is done and the database layer is written and tested. The API server is partly written (submit, read one job, claim, heartbeat, report); the worker, the reaper, the operator calls and the operator page are not started.**
+**The design is done and the database layer is written and tested. The API server is partly written (submit, read one job, claim, heartbeat, report) and so is the reaper; the worker, the operator calls and the operator page are not started.**
 
 - The spec is written ([docs/spec.md](docs/spec.md)).
 - 13 architecture decision records are written and accepted ([docs/adr](docs/adr/README.md)).
@@ -76,7 +76,7 @@ The correctness rules are written as invariants in [spec section 4](docs/spec.md
 - [x] API server, first part: authentication, submit, read one job, claim, heartbeat, report, health check, and the `jobkeys` tool for API keys
 - [ ] API server, second part: list jobs, approve, reject, redrive
 - [ ] Worker and handler contract
-- [ ] Reaper
+- [x] Reaper: takes back expired leases (T12, T13) and escalates overdue approvals (T5), every 5 s, up to 100 jobs of each kind per pass, one transaction per job
 - [ ] Operator page
 - [ ] Load, soak and chaos tests, with results written up
 
@@ -121,10 +121,11 @@ The engine speaks plain HTTP. Put it behind a TLS proxy for anything beyond loca
 
 ```
 cmd/
-  engine/                    the API server (the reaper will run inside it)
+  engine/                    the API server, with the reaper running inside it
   jobkeys/                   create, list and revoke API keys (needs database access)
 internal/
   api/                       HTTP handlers, authentication, the error shape from docs/api.md
+  reaper/                    the 5-second loop that calls the store's reaper functions
   store/                     all the SQL; the only package that talks to Postgres
   retry/                     the backoff delay from ADR 004
   canonical/                 RFC 8785 canonical JSON, used for the idempotency hash
