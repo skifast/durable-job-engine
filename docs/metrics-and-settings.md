@@ -142,3 +142,12 @@ Results of these checks: [load-test-results.md](load-test-results.md).
 | Durability | Record every job the API acknowledged, kill -9 Postgres under load, restart, and confirm every acknowledged job is in the table. |
 | Invariants | After every run, `SELECT * FROM invariant_violations_after_drain` (`db/invariants.sql`) must return zero rows. |
 | Schema rules | `db/tests/test_schema.sql` drives every state change, tries to break each rule, and plants a violation for each of the 20 invariant checks. It must end with ALL TESTS PASSED. |
+
+## 9. Several engines (ADR 016)
+
+| Setting | Value | Why | Owner |
+|---|---|---|---|
+| `DB_MAX_CONNS` | 10 per engine | A fixed number, not the CPU count, so a bigger machine does not quietly open more connections per engine. The rule: engines x `DB_MAX_CONNS` plus a margin stays under Postgres's `max_connections` (default 100, of which 3 are reserved for superusers, so about 97 are usable). | ADR 016 |
+| Reaper | one in every engine | Safe with several at once (row-lock re-check, primary key on the error history, a guarded `UPDATE` for escalation). Reapers on different timers add up; reapers firing together do not. | ADR 016 |
+| `/healthz` limit | 2 seconds | The engine's own limit for the check. A load balancer should probe with a timeout of at least 2.5 s. | ADR 016 |
+

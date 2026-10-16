@@ -4,7 +4,7 @@ A background job engine built on Postgres, with worker leases, retries, fencing 
 
 ## Status
 
-**The design is done and the database layer is written and tested. The API server (every call in docs/api.md), the reaper and the worker are written and tested; the load, soak and chaos tests have run ([results](docs/load-test-results.md)); and the operator page is written and tested. All roadmap items are done.**
+**The design is done and the database layer is written and tested. The API server (every call in docs/api.md), the reaper and the worker are written and tested; the load, soak and chaos tests have run ([results](docs/load-test-results.md)); and the operator page is written and tested. All roadmap items are done. The engine can also run as several instances behind a load balancer ([ADR 016](docs/adr/016-running-several-engines.md), tested on one laptop).**
 
 - The spec is written ([docs/spec.md](docs/spec.md)).
 - 13 architecture decision records are written and accepted ([docs/adr](docs/adr/README.md)).
@@ -57,6 +57,7 @@ Workers never talk to the database directly (ADR 002). A job moves through six s
 | [013](docs/adr/013-authentication-api-keys.md) | API keys for every caller, with roles (client, worker, operator) | Accepted |
 | [014](docs/adr/014-worker-and-handler-design.md) | Worker and handler design: classify by wrapping errors, time limit in the work item, stuck handler makes the worker exit | Accepted |
 | [015](docs/adr/015-operator-page-build.md) | Operator page: plain HTML and JavaScript embedded in the engine and served under /ui/, untrusted text shown as plain text only | Accepted |
+| [016](docs/adr/016-running-several-engines.md) | Running several engines: a DB_MAX_CONNS setting, a reaper in every engine, a load balancer in front, a health check that reads the jobs table | Accepted |
 
 ## Targets
 
@@ -72,7 +73,7 @@ The correctness rules are written as invariants in [spec section 4](docs/spec.md
 ## Roadmap
 
 - [x] Spec
-- [x] Architecture decision records (15, all accepted)
+- [x] Architecture decision records (16, all accepted)
 - [x] `schema.sql` (jobs table with constraints and triggers), `invariants.sql` (the zero-row queries) and their tests
 - [x] API contract ([docs/api.md](docs/api.md))
 - [x] API server, first part: authentication, submit, read one job, claim, heartbeat, report, health check, and the `jobkeys` tool for API keys
@@ -127,6 +128,17 @@ WORKER_KEY=<the worker key> go run ./cmd/worker              # ENGINE_URL defaul
 and submit a job with `"type": "sleep"` and `"payload": {"ms": 300}`. A worker stops cleanly on Ctrl-C (a running handler gets 30 s to finish). If a handler ignores its cancellation the worker exits with status 2 and needs to be restarted; the `stuck` demo type shows this.
 
 The operator page is at `http://localhost:8080/ui/` (the engine's `/` sends you there). It asks for an operator key: `go run ./cmd/jobkeys create -name ops-alice -role operator`. See [docs/operator-page.md](docs/operator-page.md).
+
+### Running more than one engine
+
+The engine keeps no state of its own, so several can run against one Postgres, and workers can run on other machines. Put a load balancer in front so that clients, workers and the operator page use one address ([ADR 016](docs/adr/016-running-several-engines.md)).
+
+- **Each engine** needs the same `DATABASE_URL` and `JOB_TYPES_FILE`, and its own `LISTEN_ADDR`.
+- **Connections.** Each engine opens at most `DB_MAX_CONNS` connections to Postgres (default 10). Keep engines x `DB_MAX_CONNS` plus a margin under Postgres's `max_connections` (100 by default, with 3 reserved for superusers, so about 97 are usable).
+- **Reapers.** Every engine runs one. That is safe, and if an engine dies the others cover for it.
+- **Health check.** Point the load balancer at `GET /healthz` on each engine, with a probe timeout of at least 2.5 seconds. It answers 200 only if the engine can read the jobs table within 2 seconds.
+- **Rolling restart.** Take an engine out of the load balancer, stop it with SIGTERM (it finishes the requests it is serving), start it again, wait for `/healthz`, and move to the next.
+- **Limits.** Postgres is still one node, so the engines are not a single point of failure but the database and the load balancer are, unless you make them redundant. The tests ran every engine on one laptop and show that these mechanisms work, not a speed-up. See [the results](docs/load-test-results.md).
 
 The engine speaks plain HTTP. Put it behind a TLS proxy for anything beyond local use ([ADR 013](docs/adr/013-authentication-api-keys.md)).
 

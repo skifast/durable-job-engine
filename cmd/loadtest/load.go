@@ -265,6 +265,7 @@ type Sample struct {
 	TableBytes   int64   `json:"table_bytes"`
 	TotalBytes   int64   `json:"table_with_indexes_bytes"`
 	WALBytes     int64   `json:"wal_dir_bytes"`
+	Connections  int     `json:"engine_db_connections"` // connections from the engines (not the harness)
 }
 
 func (r *Rig) sample(ctx context.Context, at time.Duration) (Sample, error) {
@@ -298,6 +299,9 @@ func (r *Rig) sample(ctx context.Context, at time.Duration) (Sample, error) {
 		return s, err
 	}
 	_ = r.Pool.QueryRow(ctx, `SELECT coalesce(sum(size), 0) FROM pg_ls_waldir()`).Scan(&s.WALBytes)
+	// The engines connect with no application_name; the harness names its own connections.
+	_ = r.Pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+		WHERE datname = $1 AND backend_type = 'client backend' AND application_name = ''`, dbName).Scan(&s.Connections)
 	return s, nil
 }
 

@@ -1,0 +1,346 @@
+{
+  "scenario": "throughput",
+  "config": {
+    "duration": "1m0s",
+    "handler": "noop",
+    "rate_per_s": 400,
+    "workers": 10
+  },
+  "verdicts": [
+    {
+      "name": "every acknowledged job is in the table",
+      "pass": true,
+      "detail": "0 of 24000 missing"
+    },
+    {
+      "name": "no client gave up on a submit",
+      "pass": true,
+      "detail": "0 gave up after retrying"
+    },
+    {
+      "name": "every job finished after the drain",
+      "pass": true,
+      "detail": "0 unfinished"
+    },
+    {
+      "name": "every job succeeded (none dead)",
+      "pass": true,
+      "detail": "succeeded 24000 of 24000 acked, dead 0"
+    },
+    {
+      "name": "one row per key (no duplicates)",
+      "pass": true,
+      "detail": "24000 rows for 24000 acked keys"
+    },
+    {
+      "name": "invariant views return zero rows",
+      "pass": true,
+      "detail": "map[]"
+    },
+    {
+      "name": "the engines stayed within engines x DB_MAX_CONNS database connections",
+      "pass": true,
+      "detail": "peak 12 connections from 3 engine(s) allowed 4 each (limit 12)"
+    },
+    {
+      "name": "every engine took a fair share of the requests (at least 80% of an equal share)",
+      "pass": true,
+      "detail": "map[engine-1:25587 engine-2:25587 engine-3:25587] of 76761"
+    },
+    {
+      "name": "sustained completion rate within 2% of the target",
+      "pass": true,
+      "detail": "399.6 jobs/s completed over the steady window (target 400); worst 10 s window 396.9"
+    },
+    {
+      "name": "no backlog at the end of the run",
+      "pass": true,
+      "detail": "took 0.5 s to drain after submitting stopped; max queued seen 33"
+    },
+    {
+      "name": "the machine did not sleep during the run",
+      "pass": true,
+      "detail": "the wall clock moved 61.0 s and the run's own timer 61.0 s (a gap means the machine slept: keep it awake, for example with caffeinate, and rerun)"
+    }
+  ],
+  "data": {
+    "db_max_conns_per_engine": 4,
+    "engines": 3,
+    "environment": {
+      "cpu": "Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz",
+      "db_max_conns_per_engine": "4",
+      "engines": "3",
+      "fsync": "on",
+      "go": "go1.27.1",
+      "logical_cpus": "16",
+      "memory_bytes": "17179869184",
+      "note": "the harness, the engine, the workers and Postgres all share this one machine",
+      "os": "darwin/amd64",
+      "os_version": "26.6.2",
+      "postgres": "postgres (PostgreSQL) 16.15 (Homebrew)",
+      "proxy_in_front": "true",
+      "shared_buffers": "128MB",
+      "synchronous_commit": "on",
+      "workers": "10"
+    },
+    "note": "start latency under load (not the idle target): p50 24 ms, p95 82 ms, p99 923 ms",
+    "peak_engine_db_connections": 12,
+    "proxy_errors": 0,
+    "proxy_events": null,
+    "requests_per_engine": {
+      "engine-1": 25587,
+      "engine-2": 25587,
+      "engine-3": 25587
+    },
+    "samples": [
+      {
+        "t_s": 0.000100119,
+        "queued": 0,
+        "running": 0,
+        "succeeded": 0,
+        "dead": 0,
+        "n_live_tup": 0,
+        "n_dead_tup": 0,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 0,
+        "table_with_indexes_bytes": 57344,
+        "wal_dir_bytes": 16777216,
+        "engine_db_connections": 3
+      },
+      {
+        "t_s": 5.000162348,
+        "queued": 7,
+        "running": 0,
+        "succeeded": 1993,
+        "dead": 0,
+        "n_live_tup": 1745,
+        "n_dead_tup": 3486,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 999424,
+        "table_with_indexes_bytes": 1409024,
+        "wal_dir_bytes": 16777216,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 10.000166603,
+        "queued": 10,
+        "running": 0,
+        "succeeded": 3990,
+        "dead": 0,
+        "n_live_tup": 3710,
+        "n_dead_tup": 7392,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 2080768,
+        "table_with_indexes_bytes": 2736128,
+        "wal_dir_bytes": 16777216,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 15.000196746,
+        "queued": 5,
+        "running": 0,
+        "succeeded": 5995,
+        "dead": 0,
+        "n_live_tup": 5812,
+        "n_dead_tup": 11614,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 3186688,
+        "table_with_indexes_bytes": 4177920,
+        "wal_dir_bytes": 33554432,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 20.000130676,
+        "queued": 0,
+        "running": 1,
+        "succeeded": 7999,
+        "dead": 0,
+        "n_live_tup": 7859,
+        "n_dead_tup": 15664,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 4268032,
+        "table_with_indexes_bytes": 5480448,
+        "wal_dir_bytes": 33554432,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 25.000102706,
+        "queued": 3,
+        "running": 1,
+        "succeeded": 9996,
+        "dead": 0,
+        "n_live_tup": 9699,
+        "n_dead_tup": 19406,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 5341184,
+        "table_with_indexes_bytes": 6914048,
+        "wal_dir_bytes": 33554432,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 30.000112062,
+        "queued": 8,
+        "running": 0,
+        "succeeded": 11992,
+        "dead": 0,
+        "n_live_tup": 11725,
+        "n_dead_tup": 23444,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 6471680,
+        "table_with_indexes_bytes": 8290304,
+        "wal_dir_bytes": 33554432,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 35.000169336,
+        "queued": 2,
+        "running": 0,
+        "succeeded": 13998,
+        "dead": 0,
+        "n_live_tup": 13763,
+        "n_dead_tup": 27532,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 7528448,
+        "table_with_indexes_bytes": 9551872,
+        "wal_dir_bytes": 33554432,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 40.000130295,
+        "queued": 9,
+        "running": 0,
+        "succeeded": 15991,
+        "dead": 0,
+        "n_live_tup": 15774,
+        "n_dead_tup": 31479,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 8585216,
+        "table_with_indexes_bytes": 10813440,
+        "wal_dir_bytes": 50331648,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 45.000213058,
+        "queued": 5,
+        "running": 0,
+        "succeeded": 17995,
+        "dead": 0,
+        "n_live_tup": 17693,
+        "n_dead_tup": 35343,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 9682944,
+        "table_with_indexes_bytes": 12296192,
+        "wal_dir_bytes": 50331648,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 50.000116244,
+        "queued": 29,
+        "running": 2,
+        "succeeded": 19969,
+        "dead": 0,
+        "n_live_tup": 19682,
+        "n_dead_tup": 39348,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 10756096,
+        "table_with_indexes_bytes": 13737984,
+        "wal_dir_bytes": 50331648,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 55.000159001,
+        "queued": 33,
+        "running": 0,
+        "succeeded": 21967,
+        "dead": 0,
+        "n_live_tup": 21774,
+        "n_dead_tup": 43526,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 11862016,
+        "table_with_indexes_bytes": 15138816,
+        "wal_dir_bytes": 50331648,
+        "engine_db_connections": 12
+      },
+      {
+        "t_s": 60.000154536,
+        "queued": 0,
+        "running": 0,
+        "succeeded": 24000,
+        "dead": 0,
+        "n_live_tup": 23800,
+        "n_dead_tup": 47558,
+        "autovacuum_count": 0,
+        "autoanalyze_count": 0,
+        "table_bytes": 12935168,
+        "table_with_indexes_bytes": 16441344,
+        "wal_dir_bytes": 50331648,
+        "engine_db_connections": 12
+      }
+    ],
+    "summary": {
+      "submitted": 24000,
+      "acked": 24000,
+      "gave_up": 0,
+      "client_retries": 0,
+      "submit_latency": {
+        "n": 24000,
+        "mean_ms": 2.191,
+        "p50_ms": 1.571,
+        "p95_ms": 5.013,
+        "p99_ms": 6.587,
+        "max_ms": 59.745
+      },
+      "start_latency_all": {
+        "n": 24000,
+        "mean_ms": 48.62,
+        "p50_ms": 24,
+        "p95_ms": 82.091,
+        "p99_ms": 922.524,
+        "max_ms": 1287.615
+      },
+      "start_latency_first_attempt": {
+        "n": 24000,
+        "mean_ms": 48.62,
+        "p50_ms": 24,
+        "p95_ms": 82.091,
+        "p99_ms": 922.524,
+        "max_ms": 1287.615
+      },
+      "completion_latency": {
+        "n": 24000,
+        "mean_ms": 49.339,
+        "p50_ms": 24.737,
+        "p95_ms": 82.955,
+        "p99_ms": 923.417,
+        "max_ms": 1289.461
+      },
+      "states": {
+        "succeeded": 24000
+      },
+      "jobs_with_more_than_one_attempt": 0,
+      "lease_expired_entries": 0,
+      "submit_rate_per_s": 400.0037756556386,
+      "completion_rate_per_s_steady": 399.56452581144487,
+      "completion_rate_per_s_worst_10s_window": 396.9,
+      "drain_s": 0.548448357,
+      "unfinished_after_drain": 0,
+      "acked_jobs_missing_from_table": 0,
+      "rows_in_table_for_run": 24000,
+      "invariant_violations": {},
+      "max_queued_seen": 33
+    },
+    "wall_clock_seconds": 60.999582919
+  }
+}

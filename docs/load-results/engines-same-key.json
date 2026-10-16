@@ -1,0 +1,44 @@
+{
+  "scenario": "same-key-across-engines",
+  "config": {
+    "engines": 3,
+    "keys": 300
+  },
+  "verdicts": [
+    {
+      "name": "each key got exactly one 201 and the others 200",
+      "pass": true,
+      "detail": "0 of 300 keys did not (statuses of the first few are in the report)"
+    },
+    {
+      "name": "one job per key in the table",
+      "pass": true,
+      "detail": "300 rows, 300 distinct keys, 300 keys sent"
+    },
+    {
+      "name": "invariant view returns zero rows",
+      "pass": true,
+      "detail": "0 violations"
+    }
+  ],
+  "data": {
+    "environment": {
+      "cpu": "Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz",
+      "db_max_conns_per_engine": "10",
+      "engines": "3",
+      "fsync": "on",
+      "go": "go1.27.1",
+      "logical_cpus": "16",
+      "memory_bytes": "17179869184",
+      "note": "the harness, the engine, the workers and Postgres all share this one machine",
+      "os": "darwin/amd64",
+      "os_version": "26.6.2",
+      "postgres": "postgres (PostgreSQL) 16.15 (Homebrew)",
+      "proxy_in_front": "true",
+      "shared_buffers": "128MB",
+      "synchronous_commit": "on",
+      "workers": "0"
+    },
+    "wall_clock_seconds": 0.502492516
+  }
+}

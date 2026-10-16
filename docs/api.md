@@ -292,7 +292,9 @@ The operator page uses it at sign-in (ADR 015).
 
 ## Health
 
-`GET /healthz` (no key). 200 `{ "status": "ok" }` when the engine can run a query on Postgres, otherwise 503 `{ "status": "database_unavailable" }`.
+`GET /healthz` (no key). 200 `{ "status": "ok" }` when the engine can read from the jobs table within 2 seconds, otherwise 503 `{ "status": "database_unavailable" }`.
+
+It reads from the jobs table, and not just "SELECT 1", so a lock on that table (a migration, for example) makes the engine report unhealthy, as does a database that cannot be reached, a hung database, and a pool with every connection busy. Killed connections are replaced and the check recovers. It does not check that the reaper is running or the schema's version (ADR 016). A load balancer should probe with a timeout of at least 2.5 seconds, longer than the engine's own 2 seconds.
 
 ## Errors that can come from any call
 

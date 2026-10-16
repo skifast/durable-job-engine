@@ -64,10 +64,14 @@ func HashKey(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Ping runs a trivial query, for /healthz.
+// Ping is the health check behind /healthz. It reads from the jobs table, the table every
+// request depends on, and not just "SELECT 1": a lock on that table (a migration, for example)
+// would let a bare SELECT 1 answer while every real request waited, and a load balancer would
+// keep sending traffic to an engine that cannot serve it. The read takes one row at most, so it
+// is cheap enough to run several times a second.
 func (s *Store) Ping(ctx context.Context) error {
-	var one int
-	return s.Pool.QueryRow(ctx, "SELECT 1").Scan(&one)
+	var any bool
+	return s.Pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM jobs LIMIT 1)").Scan(&any)
 }
 
 // LookupKey finds the caller for an API key. It returns false for an unknown or

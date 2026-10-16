@@ -5,6 +5,9 @@
 //	DATABASE_URL     Postgres connection string (required)
 //	JOB_TYPES_FILE   path to the job-type JSON file (required)
 //	LISTEN_ADDR      address to listen on (default :8080)
+//	DB_MAX_CONNS     most database connections this engine opens (default 10). With several
+//	                 engines, engines x DB_MAX_CONNS plus a margin must stay under Postgres's
+//	                 max_connections (see docs/adr/016-running-several-engines.md)
 //
 // The engine also runs the reaper (every 5 s, up to 100 jobs of each kind per pass).
 //
@@ -53,11 +56,20 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	maxConns, err := config.ParseMaxConns(os.Getenv("DB_MAX_CONNS"))
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := pgxpool.New(ctx, dbURL)
+	poolCfg, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		return err
+	}
+	poolCfg.MaxConns = maxConns
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return err
 	}
@@ -84,7 +96,7 @@ func run(log *slog.Logger) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("engine listening", "addr", addr, "job_types", len(cfg.JobTypes))
+	log.Info("engine listening", "addr", addr, "job_types", len(cfg.JobTypes), "db_max_conns", maxConns)
 
 	select {
 	case err := <-errc:

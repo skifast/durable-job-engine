@@ -48,3 +48,22 @@ func TestRejects(t *testing.T) {
 		}
 	}
 }
+
+func TestParseMaxConns(t *testing.T) {
+	if DefaultMaxConns != 10 {
+		t.Errorf("the default is documented as 10 (docs and ADR 016), not %d", DefaultMaxConns)
+	}
+	if n, err := ParseMaxConns(""); err != nil || n != DefaultMaxConns {
+		t.Errorf("empty: got %d, %v; want the default", n, err)
+	}
+	for in, want := range map[string]int32{"1": 1, "10": 10, "250": 250, "1000": 1000} {
+		if n, err := ParseMaxConns(in); err != nil || n != want {
+			t.Errorf("%q: got %d, %v; want %d", in, n, err, want)
+		}
+	}
+	for _, in := range []string{"0", "-3", "1001", "ten", "5.5", " 5", "5 ", "1e2", "0x10"} {
+		if _, err := ParseMaxConns(in); err == nil {
+			t.Errorf("%q should be refused", in)
+		}
+	}
+}

@@ -387,6 +387,7 @@ One page each: context, options with tradeoffs, decision, consequences. See [the
 13. [Authentication with API keys](adr/013-authentication-api-keys.md) (Accepted): One API key per client, worker and operator, each with a role; client_id, lease_owner and decided_by come from the key.
 14. [Worker and handler design](adr/014-worker-and-handler-design.md) (Accepted): Handlers return (result, error) and classify by wrapping; the time limit travels in the work item; a stuck handler makes the worker exit; shutdown drains for 30 s; a missing handler is a retryable failure.
 15. [How the operator page is built and served](adr/015-operator-page-build.md) (Accepted): Plain HTML and JavaScript embedded in the engine and served under /ui/; untrusted text shown as plain text only; a GET /whoami call; actions only on the detail screen.
+16. [Running several engines](adr/016-running-several-engines.md) (Accepted): A DB_MAX_CONNS setting (default 10), every engine runs a reaper, a load balancer in front, and /healthz reads from the jobs table.
 
 Other settings (recorded in the ADR that uses them): see [metrics and settings](metrics-and-settings.md).
 

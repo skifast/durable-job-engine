@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -181,6 +183,27 @@ func standardChecks(rep *Report, s *RunSummary) {
 	rep.check("invariant views return zero rows", s.totalViolations() == 0, "%v", s.Violations)
 }
 
+// addEngineData records what the engines and the proxy did, and checks that the engines kept to
+// the connection limit they were given (DB_MAX_CONNS, ADR 016).
+func addEngineData(rep *Report, rig *Rig, samples []Sample) {
+	peak := 0
+	for _, s := range samples {
+		peak = max(peak, s.Connections)
+	}
+	limit := rig.Engines * rig.DBConns
+	rep.Data["peak_engine_db_connections"] = peak
+	rep.Data["engines"], rep.Data["db_max_conns_per_engine"] = rig.Engines, rig.DBConns
+	if len(samples) > 0 {
+		rep.check("the engines stayed within engines x DB_MAX_CONNS database connections", peak <= limit,
+			"peak %d connections from %d engine(s) allowed %d each (limit %d)", peak, rig.Engines, rig.DBConns, limit)
+	}
+	if rig.lb != nil {
+		rep.Data["requests_per_engine"] = rig.lb.Requests()
+		rep.Data["proxy_errors"] = rig.lb.errors.Load()
+		rep.Data["proxy_events"] = rig.lb.Events()
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Throughput (spec section 3): 50 jobs/s for 5 minutes with the 100 ms handler
 // ---------------------------------------------------------------------------
@@ -202,6 +225,7 @@ type cfg struct {
 	chaosStartWait time.Duration
 	stepRates      []float64
 	stepDuration   time.Duration
+	leases         int
 }
 
 func payloadFor(handler string) any {
@@ -230,6 +254,18 @@ func throughput(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
 	}
 	rep.Data["summary"], rep.Data["samples"] = s, smp.Snapshot()
 	standardChecks(rep, s)
+	addEngineData(rep, rig, smp.Snapshot())
+	if rig.Engines > 1 {
+		var total int64
+		for _, n := range rig.lb.Requests() {
+			total += n
+		}
+		even := true
+		for _, n := range rig.lb.Requests() {
+			even = even && float64(n) >= 0.8*float64(total)/float64(rig.Engines)
+		}
+		rep.check("every engine took a fair share of the requests (at least 80% of an equal share)", even, "%v of %d", rig.lb.Requests(), total)
+	}
 	rep.check("sustained completion rate within 2% of the target", s.CompletionRate >= 0.98*c.rate,
 		"%.1f jobs/s completed over the steady window (target %.0f); worst 10 s window %.1f", s.CompletionRate, c.rate, s.CompletionMin10)
 	rep.check("no backlog at the end of the run", s.DrainSeconds < 10, "took %.1f s to drain after submitting stopped; max queued seen %d", s.DrainSeconds, s.MaxQueued)
@@ -250,6 +286,10 @@ type Step struct {
 	QueuedAtBeg  int     `json:"queued_at_start"`
 	StartP95ms   float64 `json:"start_latency_p95_ms"`
 	Sustained    bool    `json:"sustained"`
+	// ThrottledTries is how many times this step was thrown away and run again because the CPU
+	// was throttled (too hot) while it ran. A step that could not be run cool is not a measurement.
+	ThrottledTries int  `json:"throttled_attempts_discarded"`
+	Unmeasurable   bool `json:"could_not_be_run_unthrottled,omitempty"`
 }
 
 // maxThroughput raises the submit rate step by step and reports the highest rate the system
@@ -270,43 +310,72 @@ func maxThroughput(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
 	var loads []*Load
 	best := 0.0
 	for _, rate := range c.stepRates {
-		l := newLoad(rig, fmt.Sprintf("mx%d", int(rate)), c.handler, payloadFor(c.handler))
-		loads = append(loads, l)
-		q0 := queued()
-		runStart := time.Now()
-		l.RunOpen(ctx, rate, c.stepDuration)
-		runEnd := time.Now()
-		q1 := queued()
+		var step Step
+		measured := false
+		for attempt := 0; attempt < 3 && !measured; attempt++ {
+			// Leftover queue from a thrown-away attempt, and a hot CPU, would spoil this step.
+			rig.waitDrain(ctx, "mx", c.drainLimit)
+			waitForCool(ctx, 15*time.Minute)
 
-		rows, err := rig.jobRows(ctx, l.KeyPrefix())
-		if err != nil {
-			return nil, err
-		}
-		// Jobs finished during the step include ones submitted in an earlier step, so count by
-		// finish time across all steps so far.
-		all, err := rig.jobRows(ctx, "mx")
-		if err != nil {
-			return nil, err
-		}
-		done := 0
-		for _, j := range all {
-			if j.Finished != nil && j.Finished.After(runStart) && !j.Finished.After(runEnd) {
-				done++
+			// A new load per attempt, so its idempotency keys do not clash with an earlier attempt's.
+			l := newLoad(rig, fmt.Sprintf("mx%d-%d", int(rate), attempt), c.handler, payloadFor(c.handler))
+			loads = append(loads, l)
+			var lowest atomic.Int32
+			lowest.Store(int32(cpuSpeedLimit()))
+			tctx, stopThermal := context.WithCancel(ctx)
+			go watchThermal(tctx, &lowest)
+
+			q0 := queued()
+			runStart := time.Now()
+			l.RunOpen(ctx, rate, c.stepDuration)
+			runEnd := time.Now()
+			q1 := queued()
+			stopThermal()
+
+			if lowest.Load() < 100 {
+				step.ThrottledTries++
+				fmt.Printf("  step %.0f/s attempt %d thrown away: the CPU was throttled to %d%% while it ran; cooling down and trying again\n", rate, attempt+1, lowest.Load())
+				continue
 			}
-		}
-		var st []time.Duration
-		for _, j := range rows {
-			if j.StartedAt != nil {
-				st = append(st, j.StartedAt.Sub(j.Created))
+
+			rows, err := rig.jobRows(ctx, l.KeyPrefix())
+			if err != nil {
+				return nil, err
 			}
+			// Jobs finished during the step include ones submitted in an earlier step, so count by
+			// finish time across all steps so far.
+			all, err := rig.jobRows(ctx, "mx")
+			if err != nil {
+				return nil, err
+			}
+			done := 0
+			for _, j := range all {
+				if j.Finished != nil && j.Finished.After(runStart) && !j.Finished.After(runEnd) {
+					done++
+				}
+			}
+			var st []time.Duration
+			for _, j := range rows {
+				if j.StartedAt != nil {
+					st = append(st, j.StartedAt.Sub(j.Created))
+				}
+			}
+			secs := runEnd.Sub(runStart).Seconds()
+			tries := step.ThrottledTries
+			step = Step{Rate: rate, SubmitRate: float64(l.acked.Load()) / secs, CompleteRate: float64(done) / secs,
+				QueuedAtBeg: q0, QueuedAtEnd: q1, StartP95ms: summarize(st).P95, ThrottledTries: tries}
+			step.Sustained = step.CompleteRate >= 0.95*step.SubmitRate && q1-q0 <= int(2*rate)
+			measured = true
+			fmt.Printf("  step %.0f/s: submitted %.0f/s, completed %.0f/s, queue %d -> %d, start p95 %.0f ms, sustained=%v\n",
+				rate, step.SubmitRate, step.CompleteRate, q0, q1, step.StartP95ms, step.Sustained)
 		}
-		secs := runEnd.Sub(runStart).Seconds()
-		step := Step{Rate: rate, SubmitRate: float64(l.acked.Load()) / secs, CompleteRate: float64(done) / secs,
-			QueuedAtBeg: q0, QueuedAtEnd: q1, StartP95ms: summarize(st).P95}
-		step.Sustained = step.CompleteRate >= 0.95*step.SubmitRate && q1-q0 <= int(2*rate)
+		if !measured {
+			step.Rate, step.Unmeasurable = rate, true
+			steps = append(steps, step)
+			fmt.Printf("  step %.0f/s could not be run with the CPU unthrottled after 3 tries; stopping the ramp here\n", rate)
+			break
+		}
 		steps = append(steps, step)
-		fmt.Printf("  step %.0f/s: submitted %.0f/s, completed %.0f/s, queue %d -> %d, start p95 %.0f ms, sustained=%v\n",
-			rate, step.SubmitRate, step.CompleteRate, q0, q1, step.StartP95ms, step.Sustained)
 		if !step.Sustained {
 			break
 		}
@@ -355,6 +424,7 @@ func maxThroughput(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
 		nv += v
 	}
 	rep.Data["steps"] = steps
+	rep.Data["thermal_handled"] = true // each step waits for the CPU to cool and is discarded if it throttles
 	rep.check("every acknowledged job is in the table", missing == 0, "%d of %d missing", missing, acked)
 	rep.check("no client gave up on a submit", gaveUp == 0, "%d gave up", gaveUp)
 	rep.check("every job finished after the drain", unfinished == 0, "%d unfinished after %.0f s", unfinished, drain.Seconds())
@@ -620,7 +690,11 @@ type event struct {
 }
 
 func chaos(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
-	rep := &Report{Scenario: "chaos-" + c.chaosKind, Config: map[string]any{
+	name := "chaos-" + c.chaosKind
+	if c.chaosKind == "rolling" {
+		name = "rolling-restart"
+	}
+	rep := &Report{Scenario: name, Config: map[string]any{
 		"kind": c.chaosKind, "rate_per_s": c.rate, "duration": c.duration.String(), "kill_every": c.killEvery.String(),
 		"downtime": c.downtime.String(), "workers": rig.Workers}, Data: map[string]any{}}
 	l := newLoad(rig, "ch", "sleep", map[string]int{"ms": 100})
@@ -655,6 +729,27 @@ func chaos(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
 				time.Sleep(c.downtime)
 				if err := rig.RestartWorker(i); err != nil {
 					note("restart failed", err.Error())
+				}
+			case "one-engine":
+				i := rand.Intn(rig.Engines)
+				note("kill -9 engine", fmt.Sprint(i+1))
+				rig.KillEngineAt(i)
+				time.Sleep(c.downtime)
+				if err := rig.RestartEngineAt(i); err != nil {
+					note("restart failed", err.Error())
+				}
+				note("engine healthy again", fmt.Sprint(i+1))
+			case "rolling":
+				// One engine at a time: ask it to stop (it finishes what it is serving), start it again,
+				// wait until it is healthy, then move on to the next.
+				for i := 0; i < rig.Engines; i++ {
+					note("rolling restart: stop engine (SIGTERM)", fmt.Sprint(i+1))
+					rig.StopEngineAt(i)
+					if err := rig.RestartEngineAt(i); err != nil {
+						note("restart failed", err.Error())
+					}
+					note("rolling restart: engine healthy again", fmt.Sprint(i+1))
+					time.Sleep(time.Second) // the proxy's health check notices within a quarter of a second
 				}
 			case "engine":
 				note("kill -9 engine (API server and reaper)", "")
@@ -691,9 +786,12 @@ func chaos(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
 	}
 	rep.Data["summary"], rep.Data["events"], rep.Data["samples"] = s, events, smp.Snapshot()
 	standardChecks(rep, s)
+	addEngineData(rep, rig, smp.Snapshot())
 	kills := 0
 	for _, e := range events {
-		if strings.HasPrefix(e.What, "kill") {
+		// A kill, or the stopping of an engine in a rolling restart. (The "healthy again" event that
+		// follows each restart starts with the same words and must not be counted a second time.)
+		if strings.HasPrefix(e.What, "kill") || strings.HasPrefix(e.What, "rolling restart: stop") {
 			kills++
 		}
 	}
@@ -865,5 +963,156 @@ func pauseWorker(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
 	var viol int
 	rig.Pool.QueryRow(ctx, `SELECT count(*) FROM invariant_violations`).Scan(&viol)
 	rep.check("invariant view returns zero rows", viol == 0, "%d violations", viol)
+	return rep, nil
+}
+
+// ---------------------------------------------------------------------------
+// The same idempotency key sent to different engines at the same moment
+// ---------------------------------------------------------------------------
+
+// sameKey sends each key to every engine at once, bypassing the proxy. The database's unique
+// constraint is what makes one of them the first: exactly one request must get 201, and the rest
+// 200 with the same job (a 409 "still being saved" is retried, as a client would).
+func sameKey(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
+	rep := &Report{Scenario: "same-key-across-engines", Config: map[string]any{"engines": rig.Engines, "keys": c.samples}, Data: map[string]any{}}
+	if rig.Engines < 2 {
+		return nil, fmt.Errorf("same-key needs -engines 2 or more")
+	}
+	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{MaxIdleConnsPerHost: 64}}
+	post := func(base, key string, k int) int {
+		body := fmt.Sprintf(`{"type":"noop","payload":{"k":%d}}`, k)
+		req, _ := http.NewRequestWithContext(ctx, "POST", base+"/jobs", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token(clientKey))
+		req.Header.Set("Idempotency-Key", key)
+		res, err := client.Do(req)
+		if err != nil {
+			return 0
+		}
+		io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+		return res.StatusCode
+	}
+
+	bad := 0
+	ids := map[string]bool{}
+	for k := 0; k < c.samples; k++ {
+		key := fmt.Sprintf("sk-%d", k)
+		start := make(chan struct{})
+		statuses := make([]int, rig.Engines)
+		var wg sync.WaitGroup
+		for i := 0; i < rig.Engines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				for try := 0; try < 20; try++ {
+					st := post(rig.EngineURLAt(i), key, k)
+					if st == 409 { // the first request was still being saved: retry, as a client would
+						time.Sleep(100 * time.Millisecond)
+						continue
+					}
+					statuses[i] = st
+					return
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		created, repeated := 0, 0
+		for _, st := range statuses {
+			switch st {
+			case 201:
+				created++
+			case 200:
+				repeated++
+			}
+		}
+		if created != 1 || repeated != rig.Engines-1 {
+			bad++
+			if bad <= 5 {
+				rep.Data[fmt.Sprintf("example_problem_%s", key)] = statuses
+			}
+		}
+		ids[key] = true
+	}
+	var rows, distinct int
+	rig.Pool.QueryRow(ctx, `SELECT count(*), count(DISTINCT idempotency_key) FROM jobs WHERE client_id = $1 AND left(idempotency_key, 3) = 'sk-'`, clientKey).Scan(&rows, &distinct)
+	rep.check("each key got exactly one 201 and the others 200", bad == 0, "%d of %d keys did not (statuses of the first few are in the report)", bad, c.samples)
+	rep.check("one job per key in the table", rows == c.samples && distinct == c.samples, "%d rows, %d distinct keys, %d keys sent", rows, distinct, c.samples)
+	var plain int
+	rig.Pool.QueryRow(ctx, `SELECT count(*) FROM invariant_violations`).Scan(&plain)
+	rep.check("invariant view returns zero rows", plain == 0, "%d violations", plain)
+	return rep, nil
+}
+
+// ---------------------------------------------------------------------------
+// How quickly the engines' reapers recover 1,000 expired leases
+// ---------------------------------------------------------------------------
+
+func ensureClaimer(ctx context.Context, rig *Rig) (*claimer, error) {
+	if _, err := rig.Pool.Exec(ctx, `INSERT INTO api_keys (name, role, key_hash) VALUES ('claimer', 'worker', $1) ON CONFLICT DO NOTHING`, store.HashKey(token("claimer"))); err != nil {
+		return nil, err
+	}
+	return &claimer{rig: rig, http: &http.Client{Timeout: 20 * time.Second}, key: "claimer"}, nil
+}
+
+// reaperRecovery sets up c.leases running jobs, expires all their leases at once, and times how
+// long the engines' own reapers (one per engine, each on its own 5-second timer) take to put every
+// one back. Each reaper handles at most 100 jobs per pass (ADR 003 and the reaper's batch), so one
+// engine needs about leases/100 passes.
+func reaperRecovery(ctx context.Context, rig *Rig, c cfg) (*Report, error) {
+	rep := &Report{Scenario: "reaper-recovery", Config: map[string]any{"expired_leases": c.leases, "engines": rig.Engines}, Data: map[string]any{}}
+	l := newLoad(rig, "rr", "sleep", map[string]int{"ms": 100})
+	var wg sync.WaitGroup
+	per := c.leases / 20
+	for w := 0; w < 20; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < per; i++ {
+				l.submitOne(ctx)
+			}
+		}()
+	}
+	wg.Wait()
+	n := int(l.acked.Load())
+	cl, err := ensureClaimer(ctx, rig)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < n; i++ {
+		_, status, _, _, err := cl.claim(ctx)
+		if err != nil || status != 200 {
+			return nil, fmt.Errorf("setup claim %d: status %d err %v", i, status, err)
+		}
+	}
+	tag, err := rig.Pool.Exec(ctx, `UPDATE jobs SET lease_expires_at = now() - interval '1 second' WHERE state = 'running'`)
+	if err != nil {
+		return nil, err
+	}
+	t0 := time.Now()
+	var running int
+	for time.Since(t0) < 5*time.Minute {
+		rig.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE state = 'running'`).Scan(&running)
+		if running == 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	took := time.Since(t0)
+
+	var entries, distinct, queued, notOnce int
+	rig.Pool.QueryRow(ctx, `SELECT count(*), count(DISTINCT job_id) FROM job_errors WHERE kind = 'lease_expired'`).Scan(&entries, &distinct)
+	rig.Pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE state = 'queued'`).Scan(&queued)
+	rig.Pool.QueryRow(ctx, `SELECT count(*) FROM (SELECT job_id FROM job_errors GROUP BY job_id HAVING count(*) <> 1) x`).Scan(&notOnce)
+	var plain int
+	rig.Pool.QueryRow(ctx, `SELECT count(*) FROM invariant_violations`).Scan(&plain)
+	rep.Data["expired_leases"], rep.Data["seconds_until_none_left_running"] = tag.RowsAffected(), took.Seconds()
+	rep.Data["passes_one_reaper_would_need"] = (n + 99) / 100
+	rep.check("every expired lease was taken back", running == 0 && int(tag.RowsAffected()) == n, "%d still running, %d expired of %d submitted", running, tag.RowsAffected(), n)
+	rep.check("each job was requeued exactly once (one lease_expired entry each)", entries == n && distinct == n && notOnce == 0 && queued == n,
+		"%d entries for %d jobs, %d queued, %d jobs without exactly one entry", entries, distinct, queued, notOnce)
+	rep.check("invariant view returns zero rows", plain == 0, "%d violations", plain)
+	rep.Data["reported"] = fmt.Sprintf("%d engine(s): %d expired leases all requeued in %.1f s", rig.Engines, n, took.Seconds())
 	return rep, nil
 }

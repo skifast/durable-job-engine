@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -120,4 +121,23 @@ func positiveDuration(typ, field, s string) (time.Duration, error) {
 		return 0, fmt.Errorf("config: job type %q: %s must be greater than zero", typ, field)
 	}
 	return d, nil
+}
+
+// DefaultMaxConns is how many database connections one engine may open when DB_MAX_CONNS is not
+// set. A fixed number, not the CPU count: a bigger machine would otherwise quietly open more
+// connections per engine and several engines would exceed what Postgres allows (ADR 016).
+const DefaultMaxConns = 10
+
+// ParseMaxConns reads the DB_MAX_CONNS setting. An empty value is the default. Anything that is
+// not a whole number from 1 to 1000 is an error, so a typo stops the engine at startup instead
+// of being ignored.
+func ParseMaxConns(s string) (int32, error) {
+	if s == "" {
+		return DefaultMaxConns, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 || n > 1000 {
+		return 0, fmt.Errorf("DB_MAX_CONNS must be a whole number from 1 to 1000, got %q", s)
+	}
+	return int32(n), nil
 }
