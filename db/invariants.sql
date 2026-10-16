@@ -44,6 +44,8 @@
 --   Same key, different payload is rejected           API test (the 422 path); payload cannot change (trigger)
 --   An approval decision applies at most once         trigger jobs_check_update + view: decision_mismatch
 --   Escalation never changes state, happens once      trigger jobs_check_update + view: escalation_mismatch
+--   Size and range limits (spec sections 5 and 8)     CHECK + view: result_too_large, payload_too_large,
+--                                                     max_attempts_out_of_range
 
 -- The test client (load, soak and chaos runs) writes one row here for every job the
 -- API acknowledged with 201 or 200. This is how "no acknowledged job is lost" is
@@ -87,11 +89,25 @@ FROM jobs
 WHERE (state = 'succeeded') <> (result IS NOT NULL)
 
 UNION ALL
--- The result stays under 64 KB.
+-- The result stays under the database backstop (128 KB; the API enforces 64 KB of compact JSON).
 SELECT 'result_too_large', id,
        format('%s bytes', octet_length(result::text))
 FROM jobs
-WHERE octet_length(result::text) > 65536
+WHERE octet_length(result::text) > 131072
+
+UNION ALL
+-- The payload stays under the database backstop (128 KB; the API enforces 64 KB of compact JSON).
+SELECT 'payload_too_large', id,
+       format('%s bytes', octet_length(payload::text))
+FROM jobs
+WHERE octet_length(payload::text) > 131072
+
+UNION ALL
+-- max_attempts stays between 1 and 100.
+SELECT 'max_attempts_out_of_range', id,
+       format('max_attempts %s', max_attempts)
+FROM jobs
+WHERE max_attempts NOT BETWEEN 1 AND 100
 
 UNION ALL
 -- The attempt count fits the state: a job that ran has been claimed, a job that

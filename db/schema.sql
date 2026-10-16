@@ -1,7 +1,7 @@
 -- schema.sql: the jobs table, the error history table, and the rules the
 -- database enforces on its own.
 --
--- Written against docs/spec.md (sections 4, 5, 6, 9) and ADR 001, 005, 006, 009, 011.
+-- Written against docs/spec.md (sections 4, 5, 6, 9) and ADR 001, 005, 006, 009, 011, 013.
 -- Needs Postgres 13 or newer (gen_random_uuid() is built in from 13).
 -- Tested on Postgres 16.
 --
@@ -18,6 +18,18 @@
 
 BEGIN;
 
+-- The database must use UTF8. length() counts characters in UTF8 but bytes in SQL_ASCII,
+-- so the length limits below (idempotency key, error message) would be wrong, and the
+-- database would accept bytes that are not valid text. Docker's postgres image uses UTF8
+-- by default. If your server does not: CREATE DATABASE name ENCODING 'UTF8' TEMPLATE template0;
+DO $$
+BEGIN
+    IF current_setting('server_encoding') <> 'UTF8' THEN
+        RAISE EXCEPTION 'the database encoding must be UTF8, but it is %', current_setting('server_encoding');
+    END IF;
+END
+$$;
+
 -- ---------------------------------------------------------------------------
 -- jobs
 -- ---------------------------------------------------------------------------
@@ -32,7 +44,10 @@ CREATE TABLE jobs (
     -- SHA-256 of the canonical JSON of {type, payload}, as 64 lowercase hex characters.
     -- Used to tell "same key, same request" (200) from "same key, different request" (422).
     payload_hash      text        NOT NULL CHECK (payload_hash ~ '^[0-9a-f]{64}$'),
-    payload           jsonb       NOT NULL,
+    -- The API accepts at most 64 KB of compact JSON (docs/api.md). Postgres prints JSON with
+    -- extra spaces, so this check is a backstop at 128 KB: it catches an API bug without
+    -- refusing a payload the API accepted.
+    payload           jsonb       NOT NULL CHECK (octet_length(payload::text) <= 131072),
 
     -- State and counters.
     state             text        NOT NULL CHECK (state IN
@@ -40,7 +55,7 @@ CREATE TABLE jobs (
     -- attempt counts claims. It goes up by 1 at each claim and never goes down.
     -- It is also the fencing token (ADR 009).
     attempt           integer     NOT NULL DEFAULT 0 CHECK (attempt >= 0),
-    max_attempts      integer     NOT NULL DEFAULT 8 CHECK (max_attempts >= 1),
+    max_attempts      integer     NOT NULL DEFAULT 8 CHECK (max_attempts BETWEEN 1 AND 100),
     -- A queued job can be claimed once run_at has passed. Retries set it in the future.
     run_at            timestamptz NOT NULL DEFAULT now(),
 
@@ -60,8 +75,10 @@ CREATE TABLE jobs (
     redriven_at       timestamptz,
 
     -- Outcome. The error history is in job_errors.
-    -- Spec section 5: at most 64 KB. A success with no result is stored as '{}'.
-    result            jsonb       CHECK (octet_length(result::text) <= 65536),
+    -- The API accepts at most 64 KB of compact JSON (spec section 5); the check here is a
+    -- backstop at 128 KB, for the same reason as the payload. A success with no result is
+    -- stored as '{}'.
+    result            jsonb       CHECK (octet_length(result::text) <= 131072),
 
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
@@ -146,11 +163,57 @@ CREATE TABLE job_errors (
     occurred_at timestamptz NOT NULL DEFAULT now(),
     -- retryable: the worker reported a failure that may work next time (includes a handler timeout)
     -- permanent: the worker reported that no retry can help
+    -- unclassified: the handler raised an error it did not classify (an uncaught exception or
+    --   a panic). Retried like retryable, but recorded separately so operators can find it
     -- lease_expired: the reaper took the job back
-    kind        text        NOT NULL CHECK (kind IN ('retryable', 'permanent', 'lease_expired')),
+    kind        text        NOT NULL CHECK (kind IN ('retryable', 'permanent', 'unclassified', 'lease_expired')),
     message     text        NOT NULL CHECK (length(message) <= 1000),
     PRIMARY KEY (job_id, attempt)
 );
+
+-- ---------------------------------------------------------------------------
+-- api_keys: one key per caller (ADR 013)
+-- ---------------------------------------------------------------------------
+-- The key itself is never stored, only its SHA-256 hash. The API hashes the key it
+-- receives and looks that hash up. A long random key cannot be guessed, so a fast
+-- hash is enough (slow hashing is for passwords people choose).
+-- The name is what the rest of the system records:
+--   client key   -> client_id on submitted jobs
+--   worker key   -> lease_owner on claimed jobs
+--   operator key -> decided_by on decisions, and the redrive record
+-- Names are unique across all roles, so a name never means two callers.
+CREATE TABLE api_keys (
+    id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       text        NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 255),
+    role       text        NOT NULL CHECK (role IN ('client', 'worker', 'operator')),
+    key_hash   text        NOT NULL UNIQUE CHECK (key_hash ~ '^[0-9a-f]{64}$'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    revoked_at timestamptz              -- set when the key is revoked; a revoked key is refused
+);
+
+CREATE FUNCTION api_keys_check_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    -- A key's identity never changes. To change a name or role, revoke the key and create a new one.
+    IF (NEW.id, NEW.name, NEW.role, NEW.key_hash, NEW.created_at)
+       IS DISTINCT FROM (OLD.id, OLD.name, OLD.role, OLD.key_hash, OLD.created_at) THEN
+        RAISE EXCEPTION 'an API key''s name, role and hash cannot change; revoke it and create a new key'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+
+    -- Revoking is final. A revoked key is never brought back; create a new key instead.
+    IF OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+        RAISE EXCEPTION 'a revoked API key cannot be changed or restored'
+            USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER api_keys_check_update
+    BEFORE UPDATE ON api_keys
+    FOR EACH ROW EXECUTE FUNCTION api_keys_check_update();
 
 -- ---------------------------------------------------------------------------
 -- Indexes

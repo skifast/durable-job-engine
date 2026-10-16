@@ -18,6 +18,7 @@
 --   7  changes the database must refuse
 --   8  each CHECK constraint on its own
 --   9  invariants.sql: clean data gives zero rows, and each invariant catches a planted violation
+--   10 api_keys: constraints, lookup by hash, and revoking (ADR 013)
 
 BEGIN;
 
@@ -303,6 +304,19 @@ BEGIN
     ASSERT pg_temp.report_failure(j, 'worker-a', 1, 'permanent', 'invalid payload') = 1, 'permanent failure accepted';
     ASSERT (SELECT state FROM jobs WHERE id = j) = 'dead', 'a permanent failure goes straight to dead';
     ASSERT pg_temp.violation_count() = 0, 'dead after a permanent failure is valid';
+
+    -- An unclassified failure (an error the handler did not classify) is retried like a
+    -- retryable one, and recorded under its own kind.
+    j := pg_temp.new_job('unclassified-1', false, 2);
+    PERFORM pg_temp.claim_job(j, 'worker-a');
+    ASSERT pg_temp.report_failure(j, 'worker-a', 1, 'unclassified', 'panic: nil pointer') = 1, 'unclassified failure accepted';
+    ASSERT (SELECT state FROM jobs WHERE id = j) = 'queued', 'an unclassified failure is retried';
+    ASSERT (SELECT kind FROM job_errors WHERE job_id = j AND attempt = 1) = 'unclassified', 'it is recorded as unclassified';
+    PERFORM pg_temp.fast_forward(j);
+    PERFORM pg_temp.claim_job(j, 'worker-b');
+    ASSERT pg_temp.report_failure(j, 'worker-b', 2, 'unclassified', 'panic again') = 1, 'second unclassified failure accepted';
+    ASSERT (SELECT state FROM jobs WHERE id = j) = 'dead', 'unclassified failures end in dead when attempts run out';
+    ASSERT pg_temp.violation_count() = 0, 'dead after unclassified failures is valid';
 
     RAISE NOTICE 'part 3 passed: retry and dead';
 END;
@@ -590,8 +604,8 @@ BEGIN
         format($q$UPDATE jobs SET state = 'succeeded', finished_at = now(), lease_owner = NULL, lease_expires_at = NULL WHERE id = %L$q$, r));
     PERFORM pg_temp.must_fail('queued job with a result', '23514',
         format($q$UPDATE jobs SET result = '{}' WHERE id = %L$q$, q));
-    PERFORM pg_temp.must_fail('result over 64 KB', '23514',
-        format($q$UPDATE jobs SET state = 'succeeded', result = to_jsonb(repeat('x', 70000)), finished_at = now(),
+    PERFORM pg_temp.must_fail('result over the 128 KB backstop', '23514',
+        format($q$UPDATE jobs SET state = 'succeeded', result = to_jsonb(repeat('x', 140000)), finished_at = now(),
                                   lease_owner = NULL, lease_expires_at = NULL WHERE id = %L$q$, r));
     PERFORM pg_temp.must_fail('queued job with no attempts left', '23514',
         format($q$UPDATE jobs SET attempt = 8 WHERE id = %L$q$, q));
@@ -599,6 +613,10 @@ BEGIN
         format($q$UPDATE jobs SET attempt = 9 WHERE id = %L$q$, r));
     PERFORM pg_temp.must_fail('max_attempts of 0', '23514',
         format($q$UPDATE jobs SET max_attempts = 0 WHERE id = %L$q$, q));
+    PERFORM pg_temp.must_fail('max_attempts of 101', '23514',
+        format($q$UPDATE jobs SET max_attempts = 101 WHERE id = %L$q$, q));
+    PERFORM pg_temp.must_fail('payload over the 128 KB backstop', '23514',
+        format($q$UPDATE jobs SET payload = to_jsonb(repeat('x', 140000)) WHERE id = %L$q$, q));
     PERFORM pg_temp.must_fail('waiting job already decided', '23514',
         format($q$UPDATE jobs SET decided_by = 'a', decided_at = now() WHERE id = %L$q$, w));
     PERFORM pg_temp.must_fail('waiting job queued without a decision (gate)', '23514',
@@ -641,7 +659,8 @@ DECLARE
         'result_too_large', 'attempt_state_mismatch', 'lease_mismatch', 'attempt_ended_without_error',
         'error_attempt_out_of_range', 'error_on_unfinished_attempt', 'dead_without_cause',
         'approval_gate_skipped', 'waiting_job_was_run', 'decision_mismatch', 'escalation_mismatch',
-        'duplicate_idempotency_key', 'acknowledged_job_missing', 'acknowledged_job_not_finished'];
+        'duplicate_idempotency_key', 'acknowledged_job_missing', 'acknowledged_job_not_finished',
+        'payload_too_large', 'max_attempts_out_of_range'];
     in_view text[];
     j uuid;
     ghost uuid := gen_random_uuid();
@@ -686,7 +705,7 @@ BEGIN
     j := pg_temp.new_job('p4'); UPDATE jobs SET result = '{}' WHERE id = j;
     INSERT INTO planted VALUES ('result_mismatch', j);
     -- result_too_large
-    j := pg_temp.new_job('p5'); UPDATE jobs SET result = to_jsonb(repeat('x', 70000)) WHERE id = j;
+    j := pg_temp.new_job('p5'); UPDATE jobs SET result = to_jsonb(repeat('x', 140000)) WHERE id = j;
     INSERT INTO planted VALUES ('result_too_large', j);
     -- attempt_state_mismatch (a waiting job that has an attempt)
     j := pg_temp.new_job('p6', true); UPDATE jobs SET attempt = 1 WHERE id = j;
@@ -732,6 +751,12 @@ BEGIN
     j := pg_temp.new_job('p18');
     INSERT INTO test_acknowledged_jobs (job_id) VALUES (j);
     INSERT INTO planted VALUES ('acknowledged_job_not_finished', j);
+    -- payload_too_large
+    j := pg_temp.new_job('p19'); UPDATE jobs SET payload = to_jsonb(repeat('x', 140000)) WHERE id = j;
+    INSERT INTO planted VALUES ('payload_too_large', j);
+    -- max_attempts_out_of_range
+    j := pg_temp.new_job('p20'); UPDATE jobs SET max_attempts = 101 WHERE id = j;
+    INSERT INTO planted VALUES ('max_attempts_out_of_range', j);
 
     -- Every planted violation must show up under its own name and (where there is one) its own job id.
     FOR name, j IN SELECT invariant, job_id FROM planted LOOP
@@ -750,6 +775,57 @@ BEGIN
         format('TEST FAILED: invariants in the views %s do not match the tested list %s', in_view, expected);
 
     RAISE NOTICE 'part 9 passed: % invariants each caught a planted violation', array_length(expected, 1);
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 10. api_keys (ADR 013)
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+    h text := encode(sha256(convert_to('secret-key-1', 'UTF8')), 'hex');
+    found record;
+    n integer;
+BEGIN
+    INSERT INTO api_keys (name, role, key_hash) VALUES ('alice', 'operator', h);
+
+    -- The API's lookup: hash what the caller sent, find an active key.
+    SELECT name, role INTO found FROM api_keys
+    WHERE key_hash = encode(sha256(convert_to('secret-key-1', 'UTF8')), 'hex') AND revoked_at IS NULL;
+    ASSERT found.name = 'alice' AND found.role = 'operator', 'a valid key is found by its hash';
+    SELECT count(*) INTO n FROM api_keys
+    WHERE key_hash = encode(sha256(convert_to('wrong-key', 'UTF8')), 'hex') AND revoked_at IS NULL;
+    ASSERT n = 0, 'an unknown key is not found';
+
+    -- Constraints.
+    PERFORM pg_temp.must_fail('duplicate name', '23505',
+        format($q$INSERT INTO api_keys (name, role, key_hash) VALUES ('alice', 'client', %L)$q$, repeat('b', 64)));
+    PERFORM pg_temp.must_fail('duplicate hash', '23505',
+        format($q$INSERT INTO api_keys (name, role, key_hash) VALUES ('bob', 'client', %L)$q$, h));
+    PERFORM pg_temp.must_fail('unknown role', '23514',
+        format($q$INSERT INTO api_keys (name, role, key_hash) VALUES ('bob', 'admin', %L)$q$, repeat('c', 64)));
+    PERFORM pg_temp.must_fail('hash that is not SHA-256 hex', '23514',
+        $q$INSERT INTO api_keys (name, role, key_hash) VALUES ('bob', 'client', 'plain-text-key')$q$);
+    PERFORM pg_temp.must_fail('empty name', '23514',
+        format($q$INSERT INTO api_keys (name, role, key_hash) VALUES ('', 'client', %L)$q$, repeat('d', 64)));
+
+    -- Identity never changes.
+    PERFORM pg_temp.must_fail('rename a key', '23000', $q$UPDATE api_keys SET name = 'alice2' WHERE name = 'alice'$q$);
+    PERFORM pg_temp.must_fail('change a key''s role', '23000', $q$UPDATE api_keys SET role = 'worker' WHERE name = 'alice'$q$);
+    PERFORM pg_temp.must_fail('change a key''s hash', '23000',
+        format($q$UPDATE api_keys SET key_hash = %L WHERE name = 'alice'$q$, repeat('e', 64)));
+
+    -- Revoke: the key is no longer found, and the revoke cannot be undone or moved.
+    UPDATE api_keys SET revoked_at = now() WHERE name = 'alice' AND revoked_at IS NULL;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    ASSERT n = 1, 'revoking works';
+    SELECT count(*) INTO n FROM api_keys WHERE key_hash = h AND revoked_at IS NULL;
+    ASSERT n = 0, 'a revoked key is not found by the lookup';
+    PERFORM pg_temp.must_fail('restore a revoked key', '23000', $q$UPDATE api_keys SET revoked_at = NULL WHERE name = 'alice'$q$);
+    PERFORM pg_temp.must_fail('move the revoke time', '23000',
+        $q$UPDATE api_keys SET revoked_at = now() + interval '1 day' WHERE name = 'alice'$q$);
+
+    RAISE NOTICE 'part 10 passed: api_keys';
 END;
 $$;
 
