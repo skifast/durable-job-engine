@@ -236,6 +236,10 @@ func TestEveryEndpointNeedsAKeyAndTheRightRole(t *testing.T) {
 	eps := []ep{
 		{"POST", "/jobs", []string{"alice"}, map[string]any{"type": "plain", "payload": 1}},
 		{"GET", "/jobs/" + id, []string{"alice", "op1"}, nil},
+		{"GET", "/jobs", []string{"alice", "op1"}, nil},
+		{"POST", "/jobs/" + id + "/approve", []string{"op1"}, nil},
+		{"POST", "/jobs/" + id + "/reject", []string{"op1"}, map[string]any{"reason": "x"}},
+		{"POST", "/jobs/" + id + "/redrive", []string{"op1"}, map[string]any{"max_attempts": 5}},
 		{"POST", "/claim", []string{"w1"}, nil},
 		{"POST", "/jobs/" + id + "/heartbeat", []string{"w1"}, map[string]any{"attempt": 1}},
 		{"POST", "/jobs/" + id + "/report", []string{"w1"}, map[string]any{"attempt": 1, "outcome": "success"}},

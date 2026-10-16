@@ -157,7 +157,7 @@ func (s *Store) Submit(ctx context.Context, p SubmitParams) (job *Job, created b
 			return nil, false, ErrKeyReused
 		}
 	default:
-		return nil, false, mapSubmitError(err)
+		return nil, false, mapContentError(err)
 	}
 
 	job, err = loadJob(ctx, tx, id)
@@ -170,7 +170,10 @@ func (s *Store) Submit(ctx context.Context, p SubmitParams) (job *Job, created b
 	return job, created, nil
 }
 
-func mapSubmitError(err error) error {
+// mapContentError turns the Postgres errors for content it cannot store, and the
+// 2 s lock timeout of a submit, into the store's own errors. Submit, Report and
+// the operator calls all use it.
+func mapContentError(err error) error {
 	var pg *pgconn.PgError
 	if errors.As(err, &pg) {
 		switch pg.Code {
@@ -403,7 +406,7 @@ func (s *Store) Report(ctx context.Context, in ReportInput) (*ReportResult, erro
 			    lease_owner = NULL, lease_expires_at = NULL, finished_at = now()
 			WHERE id = $1`, in.JobID, string(result))
 		if err != nil {
-			return nil, mapSubmitError(err)
+			return nil, mapContentError(err)
 		}
 		res.State = "succeeded"
 	} else {

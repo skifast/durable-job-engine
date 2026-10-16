@@ -4,13 +4,13 @@ A background job engine built on Postgres, with worker leases, retries, fencing 
 
 ## Status
 
-**The design is done and the database layer is written and tested. The API server is partly written (submit, read one job, claim, heartbeat, report) and so is the reaper; the worker, the operator calls and the operator page are not started.**
+**The design is done and the database layer is written and tested. The API server (every call in docs/api.md) and the reaper are written and tested; the worker and the operator page are not started.**
 
 - The spec is written ([docs/spec.md](docs/spec.md)).
 - 13 architecture decision records are written and accepted ([docs/adr](docs/adr/README.md)).
 - Every number (lease, retries, targets, limits) is listed with its reasoning in [docs/metrics-and-settings.md](docs/metrics-and-settings.md).
 - The database schema, the invariant checks and their tests are written ([db](db/README.md)), and the API contract is approved ([docs/api.md](docs/api.md)). The tests drive every state change, try to break each rule, and plant a violation for each of the 20 invariant checks to confirm it is caught.
-- The API server is written in Go ([ADR 012](docs/adr/012-implementation-language.md)). It has authentication, submit, read one job, claim, heartbeat and report, tested end to end against a real Postgres (see [Running it](#running-it)). See the roadmap below for what is left.
+- The API server is written in Go ([ADR 012](docs/adr/012-implementation-language.md)). It has every call in the API contract (authentication, submit, read, list, claim, heartbeat, report, approve, reject, redrive), tested end to end against a real Postgres (see [Running it](#running-it)). See the roadmap below for what is left.
 
 ## What it is designed to do
 
@@ -74,7 +74,7 @@ The correctness rules are written as invariants in [spec section 4](docs/spec.md
 - [x] `schema.sql` (jobs table with constraints and triggers), `invariants.sql` (the zero-row queries) and their tests
 - [x] API contract ([docs/api.md](docs/api.md))
 - [x] API server, first part: authentication, submit, read one job, claim, heartbeat, report, health check, and the `jobkeys` tool for API keys
-- [ ] API server, second part: list jobs, approve, reject, redrive
+- [x] API server, second part: list jobs (with cursor paging), approve, reject, redrive
 - [ ] Worker and handler contract
 - [x] Reaper: takes back expired leases (T12, T13) and escalates overdue approvals (T5), every 5 s, up to 100 jobs of each kind per pass, one transaction per job
 - [ ] Operator page

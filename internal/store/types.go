@@ -102,3 +102,49 @@ var (
 type LeaseLostError struct{ State string }
 
 func (e *LeaseLostError) Error() string { return "lease lost; job is " + e.State }
+
+// NotWaitingError means an approve or reject hit a job that is not waiting_approval
+// (docs/api.md, 409 not_waiting_approval). DecidedBy is set when someone already decided.
+type NotWaitingError struct {
+	State     string
+	DecidedBy *string
+}
+
+func (e *NotWaitingError) Error() string { return "job is " + e.State + ", not waiting_approval" }
+
+// NotDeadError means a redrive hit a job that is not dead (409 not_dead).
+type NotDeadError struct{ State string }
+
+func (e *NotDeadError) Error() string { return "job is " + e.State + ", not dead" }
+
+// MaxAttemptsTooLowError means a redrive asked for max_attempts that is not above the
+// job's attempt count (400 max_attempts_too_low).
+type MaxAttemptsTooLowError struct{ Attempt int }
+
+func (e *MaxAttemptsTooLowError) Error() string { return "max_attempts must be greater than attempt" }
+
+// ErrBadCursor means the cursor of a list call is not one this engine made (400).
+var ErrBadCursor = errors.New("bad cursor")
+
+// Summary is a job in a list: no payload, result or full error history (docs/api.md).
+type Summary struct {
+	ID               string     `json:"id"`
+	Type             string     `json:"type"`
+	ClientID         string     `json:"client_id"`
+	State            string     `json:"state"`
+	Attempt          int        `json:"attempt"`
+	MaxAttempts      int        `json:"max_attempts"`
+	RunAt            Time       `json:"run_at"`
+	ApprovalDeadline *Time      `json:"approval_deadline"`
+	EscalatedAt      *Time      `json:"escalated_at"`
+	CreatedAt        Time       `json:"created_at"`
+	FinishedAt       *Time      `json:"finished_at"`
+	LastError        *LastError `json:"last_error"`
+}
+
+// LastError is the newest entry of a job's error history.
+type LastError struct {
+	Attempt int    `json:"attempt"`
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
