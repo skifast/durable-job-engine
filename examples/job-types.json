@@ -1,0 +1,11 @@
+{
+  "job_types": {
+    "send_email": {},
+    "wire_payment": {
+      "needs_approval": true,
+      "approval_window": "24h",
+      "handler_time_limit": "60s",
+      "max_attempts": 3
+    }
+  }
+}
