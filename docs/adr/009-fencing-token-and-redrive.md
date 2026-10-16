@@ -35,7 +35,7 @@ Redrive raises a second question: when an operator brings a dead job back, can i
 
 **Against**
 
-- The token is guessable (attempt 3 follows attempt 2). Authentication is a non-goal, so the token is a safety check against mistakes, not a secret
+- The token is guessable (attempt 3 follows attempt 2), so it is a safety check against mistakes, not a secret. What keeps an outsider from posing as a worker is the worker's API key (ADR 013)
 
 ### C. A random token (UUID) per claim, stored in its own column
 

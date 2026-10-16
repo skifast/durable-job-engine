@@ -1,6 +1,6 @@
 # ADR 002: Workers talk to the API server, not to Postgres directly
 
-**Status:** Proposed  
+**Status:** Accepted (2026-10-07)  
 **Date:** 2026-10-06  
 **Spec sections:** 6 (transitions T6-T13), 7 (components), 8 (retry policy)  
 **Depends on:** ADR 001 (Postgres as the queue store)  
@@ -74,7 +74,7 @@ Use A. Workers call /claim, /heartbeat and /report on the API server, and only t
 - The start-latency target of 250 ms (p95, idle) now includes the poll wait (up to 100 ms) plus an HTTP request and one transaction. Measure this in the load tests.
 - The API server must stay stateless: all state is in Postgres, so more than one API instance can run and a restart loses nothing.
 - If the API server is unreachable, a worker can't claim or renew, and it cancels its handler once it can't renew for longer than the lease. This is already a listed failure case (spec section 11).
-- Authentication is a non-goal, so the worker endpoints are not authenticated in this version. Workers hold no database credentials, but anyone who can reach the API can call /claim. Treat the API as a trusted-network service.
+- Workers hold no database credentials. Since ADR 013 (2026-10-09), each worker sends its own API key with every call, so /claim is not open to anyone who can reach the API. Before that change authentication was a non-goal and the API had to be treated as a trusted-network service.
 - Poll traffic is HTTP requests rather than database connections: with 10 workers polling every 100 ms that is about 100 /claim requests per second, plus one heartbeat every 7.5 s per running job.
 - The API server applies fencing, so heartbeats and reports with the wrong lease_owner or attempt are refused there (invariant in spec section 4).
 

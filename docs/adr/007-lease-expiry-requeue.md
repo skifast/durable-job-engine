@@ -1,6 +1,6 @@
 # ADR 007: What happens when a lease expires
 
-**Status:** Proposed  
+**Status:** Accepted (2026-10-09)  
 **Date:** 2026-10-06  
 **Spec sections:** 6 (T12, T13), 7 (reaper), 8 (retry policy)  
 **Depends on:** ADR 003 (lease), ADR 004 (backoff)  

@@ -58,7 +58,7 @@ Defined in spec section 8 and ADR 004. A lease that expires uses the same delays
 
 | Setting | Value | Why |
 |---|---|---|
-| max_attempts | 8 total runs, which means 7 waits | Covers a downstream outage of about 3 minutes. Longer outages end in dead, and an operator redrives. |
+| max_attempts | 8 total runs, which means 7 waits. Allowed range: 1 to 100 | Covers a downstream outage of about 3 minutes. Longer outages end in dead, and an operator redrives. |
 | Base delay | 2 seconds, doubling each time | A quick first retry for a brief problem, and a fast backoff if it persists. |
 | Cap | 60 seconds | Without it the last two waits would be 64 s and 128 s. |
 | Jitter | 0-10% of the delay, added after the cap | Spreads retries a little. The random source is injectable so tests are repeatable. |
@@ -84,9 +84,17 @@ Because the jitter is added after the cap, the last waits can reach 66 s. The to
 | Setting | Value | Why | Owner |
 |---|---|---|---|
 | Handler maximum run time | 60 seconds by default, set per job type | Stops a stuck handler. A handler that passes it is cancelled and counts as a retryable failure. The lease is renewed by heartbeats, so the lease length does not limit run time. | Spec section 10 |
-| Result size | 64 KB of JSON; larger output is stored elsewhere and referenced | Keeps rows small, so updates and vacuum stay cheap. | Spec section 5 |
+| Result size | 64 KB of compact JSON at the API; larger output is stored elsewhere and referenced. The database refuses anything over 128 KB as a backstop | Keeps rows small, so updates and vacuum stay cheap. The backstop is higher because Postgres prints JSON with extra spaces. | Spec section 5, docs/api.md |
+| Payload size | 64 KB of compact JSON at the API, with the same 128 KB backstop in the database | Payloads sit in the same rows as results. | docs/api.md |
 | Error message length | 1,000 characters | Keeps the error history readable and the rows small. | Spec section 5 |
 | Table growth | About 4.3 million rows a day at 50 jobs per second (50 x 86,400) | Idempotency keys are kept forever in the jobs table, so rows are never deleted. Fine for tests, not for long-term running. | ADR 001, ADR 005 |
+
+Table storage settings (starting values, set in `db/schema.sql`; the 30-minute soak run decides whether they hold):
+
+| Setting | Value | Why | Owner |
+|---|---|---|---|
+| Fillfactor | 70 | Leaves 30% of each page free so an updated row can stay in the same page. | ADR 001, ADR 011 |
+| Autovacuum trigger | After 2% of rows change (the default is 20%) | Cleans up dead rows early, before they slow the claim query. | ADR 001, ADR 011 |
 
 ## 5. Approvals
 
@@ -99,8 +107,9 @@ Because the jitter is added after the cap, the last waits can reach 66 s. The to
 
 | Setting | Value | Why | Owner |
 |---|---|---|---|
-| Key scope | Per client: unique on (client_id, key) | Two clients can use the same key text without clashing. `client_id` is trusted, not verified. | ADR 005 |
-| Key retention | Forever | Keeps "at most one job per client and key" true with no exceptions. | ADR 005 |
+| Key scope | Per client: unique on (client_id, key) | Two clients can use the same key text without clashing. `client_id` is the name of the client's API key (ADR 013). | ADR 005 |
+| Key retention | Forever for now; a separate key table with an expiry is the planned upgrade | Keeps "at most one job per client and key" true with no exceptions. Expiry is needed to run beyond tests. | ADR 005 |
+| Key length | 255 characters at most; missing or empty keys are refused with 400 | Keeps keys small and makes sure every submit can be deduplicated. | ADR 005 |
 | Lock timeout for a duplicate in progress | 2 seconds | If the first request's transaction hasn't finished in 2 s, the duplicate gets 409 and retries. | ADR 005 |
 | Response codes | 201 new job, 200 same key and payload, 422 same key with a different payload, 409 first request still in progress | Lets a client tell a retry from a mistake. | ADR 005 |
 
@@ -122,6 +131,8 @@ Because the jitter is added after the cap, the last waits can reach 66 s. The to
 | Backlog behavior | Fill the queue to 100,000 rows, then compare claim p95 with an empty queue. |
 | Vacuum keeps up | 30-minute soak run. Watch dead rows (`n_dead_tup`), table size and claim p95. |
 | Lease and heartbeat | Pause a worker past its lease and confirm its late report is refused. Kill a worker and time how long until the job runs elsewhere (about 37 s expected). |
+| Duplicate key while the first request is open | `db/tests/test_duplicate_key_wait.sh`: a duplicate fails with a lock timeout after 2 s if the first request holds on, waits and inserts nothing if the first commits in time, and inserts the job if the first rolls back. |
 | Retry schedule | Unit test of the delay function with a fixed random seed: delays must match the table above and jitter must stay within 0-10%. |
 | Durability | Record every job the API acknowledged, kill -9 Postgres under load, restart, and confirm every acknowledged job is in the table. |
-| Invariants | After every run, each invariant in spec section 4 is checked by a SQL query that must return zero rows. |
+| Invariants | After every run, `SELECT * FROM invariant_violations_after_drain` (`db/invariants.sql`) must return zero rows. |
+| Schema rules | `db/tests/test_schema.sql` drives every state change, tries to break each rule, and plants a violation for each of the 20 invariant checks. It must end with ALL TESTS PASSED. |

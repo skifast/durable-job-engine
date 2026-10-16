@@ -65,7 +65,7 @@ Use A, and on timeout escalate without notifying. "Escalate" means only this: wh
 - A late approval is allowed, which differs from a design where a decision after the deadline is refused. The only refused decision is a second one on the same job.
 - Escalation is only as useful as someone looking at the list. There is no alert. This is a known limit, and notification is the natural next step.
 - The approval deadline defaults to 24 hours after submit, and can be set differently for each job type.
-- decided_by is a name typed on the operator page and not verified (ADR 010).
+- decided_by is the name of the operator's API key (ADR 010, ADR 013). It identifies the key, so it names one person only when each person has their own key.
 - The reaper escalates each job at most once, and running two reapers at once is safe because the update only applies when escalated_at is still empty.
 
 ## Revisit this decision if

@@ -20,3 +20,9 @@ pgdata/
 .DS_Store
 .idea/
 .vscode/
+
+# Go
+/engine
+/jobkeys
+*.test
+*.out

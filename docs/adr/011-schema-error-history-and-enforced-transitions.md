@@ -1,6 +1,6 @@
 # ADR 011: Schema: error history in its own table, and state changes enforced by the database
 
-**Status:** Proposed  
+**Status:** Accepted (2026-10-09)  
 **Date:** 2026-10-07  
 **Spec sections:** 4 (invariants), 5 (job model), 6 (states and transitions)  
 **Depends on:** ADR 001 (Postgres, vacuum plan), ADR 007 (lease expiry), ADR 009 (fencing token)  

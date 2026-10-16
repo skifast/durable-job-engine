@@ -38,18 +38,20 @@ Build the leases, retries, and fencing manually with Postgres. SQS provides all 
 - Duplicate submits never create duplicate jobs (idempotency key)
 - Jobs that keep failing end in the dead state (the dead-letter queue) after max_attempts, with their error history
 - A job waiting for approval stays waiting across restarts, and is escalated if nobody decides by the deadline
+- Every request is tied to a named caller through an API key, and each key can do only what its role allows: client, worker or operator (ADR 013)
 
 ### Non-goals
 
 - User-initiated cancellation of a running job
-- Authentication and multi-tenancy (client_id is a trusted label, not a verified identity)
+- User accounts, passwords, single sign-on and multi-tenancy (callers are identified by API keys, ADR 013)
 - Multi-step workflows or fan-out
 - Exactly-once side effects
 - Ordering guarantees
 - Postgres failover or multi-region (durability stops at a single node)
 - Large results (only small JSON or a reference)
 - Several handlers at once inside one worker (throughput comes from running more workers)
-- Submitting jobs from the operator page, live push updates, and login (the operator types a name that is recorded, not verified)
+- Claiming only certain job types (any worker takes any due job)
+- Submitting jobs from the operator page, live push updates, and login with user accounts (the operator presents an API key, and the key's name is recorded)
 
 ## 3. Scale and durability
 
@@ -111,14 +113,16 @@ A job is a single handler call.
 - input: payload, as JSON
 - state: state, attempt, max_attempts, run_at
 - lease: lease_owner, lease_expires_at
-- approval: approval_deadline, escalated_at, decided_by, decided_at
-- outcome: result, error history
+- approval: approval_deadline, escalated_at, decided_by, decided_at, decision_reason
+- redrive: redriven_by, redriven_at (the most recent redrive only)
+- outcome: result, and the error history (kept in its own table, one entry per failed attempt; ADR 011)
 - timestamps: created, updated, finished
 
 ### Result detail
 
-- Store small JSON with a size cap of 64 KB, or a reference for big output
-- Errors: attempt number, time, type, and a message under a length cap of 1,000 characters
+- Store small JSON with a size cap of 64 KB of compact JSON, or a reference for big output. A larger result is refused (413) and the worker reports a permanent failure
+- Payload: at most 64 KB of compact JSON. A larger submit is refused (413)
+- Errors: attempt number, time, kind (retryable, permanent, unclassified or lease_expired), and a message under a length cap of 1,000 characters (longer messages are cut)
 - No secrets in payloads, results or error messages
 - The worker sends the result through /report; the result and the state change are written in one UPDATE so nothing ever succeeds without a result
 
@@ -133,6 +137,7 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 - Approval is a gate before the handler. Job types that need approval are inserted directly as waiting_approval.
 - rejected is the end state for an explicit rejection only. When the approval deadline passes, the job is escalated: it stays waiting_approval, escalated_at is set once, and an approve or reject call still works afterwards. Escalation only sets the flag; the job then shows up when listing escalated approvals. There is no notification hook.
 - A handler that passes its time limit counts as a retryable failure.
+- An error the handler did not classify (an uncaught exception, or a panic in Go) is reported as an unclassified failure. It is retried like a retryable failure, but recorded under its own kind so operators can find handlers that need fixing.
 - Lease-expiry requeues use the same backoff as failures (T9).
 - Any transition not listed here is refused.
 
@@ -186,7 +191,7 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 
 ### T9: running → queued
 
-- **Trigger:** /report with a retryable failure (including a handler timeout), attempt < max_attempts
+- **Trigger:** /report with a retryable or unclassified failure (including a handler timeout), attempt < max_attempts
 - **Who:** worker, via the API server
 - **Guard and effects:** fenced like T8; appends to error history; run_at = now() + delay (delay computed with an injectable random source, applied with the database clock); clears the lease
 
@@ -198,7 +203,7 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 
 ### T11: running → dead
 
-- **Trigger:** /report with a retryable failure, attempt >= max_attempts
+- **Trigger:** /report with a retryable or unclassified failure, attempt >= max_attempts
 - **Who:** worker, via the API server
 - **Guard and effects:** same as T10
 
@@ -218,7 +223,7 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 
 - **Trigger:** operator redrive
 - **Who:** API server
-- **Guard and effects:** only from dead; sets a new max_attempts (greater than attempt, normally higher than before) and does not reset attempt (so fencing tokens stay unique); clears finished (so the finished invariant holds); records who
+- **Guard and effects:** only from dead; sets a new max_attempts (greater than attempt and at most 100, normally higher than before) and does not reset attempt (so fencing tokens stay unique); clears finished (so the finished invariant holds); records who
 
 ### Never happens (write a test for each)
 
@@ -234,14 +239,19 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 
 ### Clients should
 
-- submit jobs through the API with an idempotency key and a client_id
+- submit jobs through the API with an idempotency key and their API key. The client_id is the name of the key
 
 ### API server should
 
+*Request and response shapes, status codes and error codes are in [the API contract](api.md).*
+
 - accept jobs (POST /jobs with an Idempotency-Key header), store each one in Postgres (the current state of each job in a table, changing with transactions), and return 201
-- serve the worker endpoints: /claim, /heartbeat, /report
-- serve the approval and operator endpoints: POST /jobs/{id}/approve, POST /jobs/{id}/reject (takes a reason), POST /jobs/{id}/redrive (takes the new max_attempts, which must be greater than the current attempt)
+- check the API key on every request except a health check, and refuse a call the key's role does not allow: 401 for a missing, unknown or revoked key, 403 for a role that may not make the call (ADR 013)
+- serve the worker endpoints: /claim, /jobs/{id}/heartbeat, /jobs/{id}/report
+- serve the approval and operator endpoints: POST /jobs/{id}/approve, POST /jobs/{id}/reject (takes a reason), POST /jobs/{id}/redrive (takes the new max_attempts, which must be greater than the current attempt and at most 100)
 - serve read endpoints so a human can find jobs: GET /jobs?state=...&escalated=true (paginated, so a 100k-row backlog never loads at once), and GET /jobs/{id} (state, attempt, error history, result)
+- show a client only its own jobs: another client's job looks like it does not exist (404)
+- load the job types from a configuration file when it starts: for each type, whether it needs approval, the approval window (default 24 hours), the handler time limit (default 60 s) and max_attempts (default 8)
 - record results, and apply the retry-or-dead rule when a worker reports
 
 ### Reaper should
@@ -254,6 +264,7 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 
 ### Worker should
 
+- send its own API key with every call. The key's name is its lease_owner
 - poll /claim every 100 ms (needed for the 250 ms start-latency target). The claim is transition T6: it writes the lease (30 seconds, adjustable via config, plus the worker's ID) and returns the attempt number, which is the fencing token
 - run one handler at a time
 - call /heartbeat every 7.5 seconds while it runs (with a 30 second lease it can miss two in a row before losing the job)
@@ -269,12 +280,12 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 - approve or reject a waiting_approval job (reject asks for a reason)
 - list dead jobs with their error history, and redrive one (asks for the new max_attempts)
 - show the API's refusal message when an action is refused (already decided, wrong state, stale page), then reload the job
-- take the operator's name from a typed-in field and send it as decided_by
+- ask for the operator's API key, keep it in the page's memory only, and send it with each call. The key's name is recorded as decided_by (and in the redrive record)
 - refresh on demand (a refresh button; no live updates)
 
 ## 8. Retry policy
 
-- max_attempts = 8 (total runs), which gives 7 waits
+- max_attempts = 8 (total runs), which gives 7 waits. Any job's max_attempts is between 1 and 100
 - delay before the next attempt = min(2 x 2^(attempt - 1), cap) + jitter, where attempt is the number of the attempt that just failed
 - cap: 60 s. Without the cap the delays would be 2, 4, 8, 16, 32, 64, 128 s; with it they are 2, 4, 8, 16, 32, 60, 60 s
 - total waiting: 182 s (about 3 minutes) before jitter, about 3.3 minutes with 10% jitter
@@ -288,23 +299,28 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 - A duplicate submit (same key, same payload) returns 200 with the original job
 - The same key with a different payload is rejected with 422; nothing changes. A hash of the payload (payload_hash) is stored with the key to detect this
 - A duplicate submitted while the first request is still being processed returns 409. Mechanically: the second insert waits for the first transaction to finish; if the first hasn't finished within a lock timeout of 2 s, the second request returns 409 (ADR 005)
-- Key scope: per client. A key is unique per (client_id, key). The client sends a client_id with each request (for example an X-Client-Id header). It is trusted, not authenticated, because authentication is a non-goal
-- Key retention: keys are kept forever (simplest), so the "at most one job per client and idempotency key" invariant holds as written. The keys live in the jobs table
+- A missing or empty Idempotency-Key, or a key longer than 255 characters, returns 400 and stores nothing. A missing or invalid API key returns 401 (ADR 013). payload_hash covers the job type and the payload
+- The same key and payload for a job that has already ended (succeeded, dead or rejected) returns 200 with that job; a new run needs a new key, or an operator redrive
+- Key scope: per client. A key is unique per (client_id, key). The client_id is the name of the client's API key (ADR 013), so a client cannot use another client's id
+- Key retention: keys are kept forever (simplest), so the "at most one job per client and idempotency key" invariant holds as written. The keys live in the jobs table for now. The planned next step is a separate key table with an expiry (ADR 005)
 
 ## 10. Handler contract
 
 ### Handlers should
 
 - Receive the payload plus the job ID and attempt number
+- Return a result under 64 KB, or a reference to stored output. A larger result is refused and the worker reports a permanent failure
 - Return one of three outcomes: success (with an optional result), retryable failure (with an error), or permanent failure (with an error)
+- Be allowed to raise an error they did not classify: the worker catches an uncaught exception (or a panic in Go) and reports an unclassified failure with the error's type and message
 - Pass idempotency keys (derived from the job ID, the same on every attempt) to any downstream services
 - Be safe to run more than once for the same job
 - Have a maximum run time per job type, with a default of 60 s. A handler that passes it is cancelled and counts as a retryable failure
 
-### Failure types (what a handler can report)
+### Failure types
 
-- Retryable failure: trying again might work (timeout, network error, 5xx from a downstream service, handler passed its time limit). The job is retried with backoff until max_attempts.
-- Permanent failure: no retry can help (invalid payload, 4xx from a downstream service). The job goes straight to dead.
+- Retryable failure: trying again might work, because the cause is outside the job and likely to go away. Examples: a timeout, a network error, a 5xx from a downstream service, a 429 or 408 response, or the handler passing its time limit. The list is not complete. The job is retried with backoff until max_attempts.
+- Permanent failure: a later attempt would give the same result. Examples: an invalid payload, a 404 or 403 from a downstream service, or most other 4xx responses (429 and 408 are retryable). The list is not complete. The job goes straight to dead.
+- Unclassified failure: the handler raised an error it did not classify. The engine cannot tell whether a retry would help, so it retries with backoff until max_attempts, like a retryable failure. The error history records it as kind `unclassified`, and a job that ends up dead with unclassified entries points to a handler bug that needs fixing.
 
 ## 11. Failure modes (case and required behavior)
 
@@ -322,7 +338,7 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 - Worker does not hold the lease when it reports (job finishes but is not reported): the report changes nothing, and the current lease holder decides the outcome.
 - Worker can't reach the API server: it can't claim or renew. It keeps polling, and cancels its handler if it can't renew for longer than the lease.
 - A job that always fails: retried with backoff until max_attempts, then dead with its error history.
-- Result write fails: the worker retries the report a few times while it holds the lease. If it still fails, it stops, the lease expires, and the job runs again.
+- Result write fails: the worker retries the report a few times while it holds the lease. A repeat of a report that was already applied is answered with 200 (replayed), so a lost answer does not cost the job. If it still fails, it stops, the lease expires, and the job runs again.
 
 ### Database and infrastructure
 
@@ -355,15 +371,18 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 One page each: context, options with tradeoffs, decision, consequences. See [the ADR index](adr/README.md) for the full list and statuses.
 
 1. [Postgres as the queue store](adr/001-postgres-as-queue-store.md) (Accepted): Postgres, with jobs claimed using `SELECT ... FOR UPDATE SKIP LOCKED`.
-2. [Workers talk to the API server, not to Postgres directly](adr/002-workers-call-api.md) (Proposed): Workers call `/claim`, `/heartbeat` and `/report` on the API server.
-3. [Lease length and heartbeat interval](adr/003-lease-and-heartbeat.md) (Proposed): 30 s lease, 7.5 s heartbeat.
-4. [Retry curve and jitter](adr/004-retry-backoff-and-jitter.md) (Proposed): 8 attempts, 2 s base doubling, 60 s cap (182 s total waiting), 0-10% jitter.
-5. [Duplicate-key handling, key scope and retention](adr/005-duplicate-key-handling.md) (Proposed): Per-client scope, keys kept forever; 200 for a duplicate, 422 for a different payload, 409 while in progress.
+2. [Workers talk to the API server, not to Postgres directly](adr/002-workers-call-api.md) (Accepted): Workers call `/claim`, `/heartbeat` and `/report` on the API server.
+3. [Lease length and heartbeat interval](adr/003-lease-and-heartbeat.md) (Accepted): 30 s lease, 7.5 s heartbeat.
+4. [Retry curve and jitter](adr/004-retry-backoff-and-jitter.md) (Accepted): 8 attempts, 2 s base doubling, 60 s cap (182 s total waiting), 0-10% jitter.
+5. [Duplicate-key handling, key scope and retention](adr/005-duplicate-key-handling.md) (Accepted): Per-client scope, keys kept forever; 200 for a duplicate, 422 for a different payload, 409 while in progress.
 6. [Approval placement and timeout](adr/006-approval-placement-and-timeout.md) (Accepted): Gate before the handler; on timeout, escalate (flag) instead of reject.
-7. [What happens when a lease expires](adr/007-lease-expiry-requeue.md) (Proposed): Backoff, same as failures.
-8. [Durability level](adr/008-durability.md) (Proposed): Single node, default `synchronous_commit`.
+7. [What happens when a lease expires](adr/007-lease-expiry-requeue.md) (Accepted): Backoff, same as failures.
+8. [Durability level](adr/008-durability.md) (Accepted): Single node, default `synchronous_commit`.
 9. [Fencing token and redrive](adr/009-fencing-token-and-redrive.md) (Accepted): The attempt number is the fencing token; redrive sets a higher `max_attempts` and never resets `attempt`.
-10. [UI scope](adr/010-ui-scope.md) (Proposed): Operator page (list, detail, approve, reject, redrive) built only on the public API, no login.
+10. [UI scope](adr/010-ui-scope.md) (Accepted): Operator page (list, detail, approve, reject, redrive) built only on the public API, with an operator API key instead of user accounts.
+11. [Schema: error history and enforced transitions](adr/011-schema-error-history-and-enforced-transitions.md) (Accepted): The error history is its own table; CHECK constraints and triggers make the database refuse state changes not listed in section 6.
+12. [Implementation language](adr/012-implementation-language.md) (Accepted): Go for the API server, worker and reaper.
+13. [Authentication with API keys](adr/013-authentication-api-keys.md) (Accepted): One API key per client, worker and operator, each with a role; client_id, lease_owner and decided_by come from the key.
 
 Other settings (recorded in the ADR that uses them): see [metrics and settings](metrics-and-settings.md).
 
