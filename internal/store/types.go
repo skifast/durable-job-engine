@@ -87,6 +87,9 @@ type WorkItem struct {
 	Payload        json.RawMessage `json:"payload"`
 	Attempt        int             `json:"attempt"`
 	LeaseExpiresAt Time            `json:"lease_expires_at"`
+	// HandlerTimeLimitMS comes from the job-types file, not the database. The API
+	// fills it in after the claim (ADR 014).
+	HandlerTimeLimitMS int64 `json:"handler_time_limit_ms"`
 }
 
 // Errors the store returns for situations the API answers with a specific status.

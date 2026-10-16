@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/skifast/durable-job-engine/internal/canonical"
+	"github.com/skifast/durable-job-engine/internal/config"
 	"github.com/skifast/durable-job-engine/internal/store"
 )
 
@@ -168,6 +169,13 @@ func (a *API) claim(w http.ResponseWriter, r *http.Request, caller store.Key) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// The time limit is a setting of the job type. A type removed from the file after
+	// the job was submitted gets the default (docs/api.md).
+	limit := config.DefaultHandlerTimeLimit
+	if jt, ok := a.Config.JobTypes[item.Type]; ok {
+		limit = jt.HandlerTimeLimit
+	}
+	item.HandlerTimeLimitMS = limit.Milliseconds()
 	writeJSON(w, http.StatusOK, item)
 }
 

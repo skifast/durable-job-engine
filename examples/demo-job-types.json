@@ -1,0 +1,11 @@
+{
+  "job_types": {
+    "noop": {},
+    "sleep": {},
+    "flaky": {},
+    "always_fail": {"max_attempts": 3},
+    "crash": {"max_attempts": 3},
+    "stuck": {"handler_time_limit": "2s", "max_attempts": 2},
+    "needs_approval": {"needs_approval": true, "approval_window": "1h"}
+  }
+}

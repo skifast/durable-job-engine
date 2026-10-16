@@ -61,6 +61,7 @@ func newEnv(t *testing.T) *env {
 	}
 	cfg, err := config.Parse([]byte(`{"job_types": {
 		"plain":     {},
+		"limited":   {"handler_time_limit": "1500ms"},
 		"two_tries": {"max_attempts": 2},
 		"one_try":   {"max_attempts": 1},
 		"gated":     {"needs_approval": true, "approval_window": "1h"}
@@ -569,6 +570,25 @@ func TestClaim(t *testing.T) {
 }
 
 // A job whose run_at is in the future is not claimable.
+// The work item carries the job type's handler time limit (ADR 014).
+func TestClaimCarriesTimeLimit(t *testing.T) {
+	e := newEnv(t)
+	e.mustSubmit("alice", "lim1", "limited")
+	want(t, "configured limit", e.mustClaim("w1")["handler_time_limit_ms"], float64(1500))
+	e.mustSubmit("alice", "lim2", "plain")
+	want(t, "default limit", e.mustClaim("w1")["handler_time_limit_ms"], float64(60000))
+
+	// A job whose type is no longer in the file gets the default. The store does not check
+	// types (the API does at submit), so a direct submit stands in for a changed file.
+	if _, _, err := e.store.Submit(context.Background(), store.SubmitParams{
+		ClientID: "alice", IdempotencyKey: "gone", Type: "removed_type", Payload: []byte(`{}`),
+		PayloadHash: store.HashKey("gone"), MaxAttempts: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want(t, "removed type", e.mustClaim("w1")["handler_time_limit_ms"], float64(60000))
+}
+
 func TestClaimSkipsFutureJobs(t *testing.T) {
 	e := newEnv(t)
 	id := e.mustSubmit("alice", "f", "plain")

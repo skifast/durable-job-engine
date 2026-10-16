@@ -4,7 +4,7 @@ A background job engine built on Postgres, with worker leases, retries, fencing 
 
 ## Status
 
-**The design is done and the database layer is written and tested. The API server (every call in docs/api.md) and the reaper are written and tested; the worker and the operator page are not started.**
+**The design is done and the database layer is written and tested. The API server (every call in docs/api.md), the reaper and the worker are written and tested; the operator page and the load, soak and chaos tests are not started.**
 
 - The spec is written ([docs/spec.md](docs/spec.md)).
 - 13 architecture decision records are written and accepted ([docs/adr](docs/adr/README.md)).
@@ -55,6 +55,7 @@ Workers never talk to the database directly (ADR 002). A job moves through six s
 | [011](docs/adr/011-schema-error-history-and-enforced-transitions.md) | Error history in its own table; the database refuses illegal state changes | Accepted |
 | [012](docs/adr/012-implementation-language.md) | Go for the API server, worker and reaper | Accepted |
 | [013](docs/adr/013-authentication-api-keys.md) | API keys for every caller, with roles (client, worker, operator) | Accepted |
+| [014](docs/adr/014-worker-and-handler-design.md) | Worker and handler design: classify by wrapping errors, time limit in the work item, stuck handler makes the worker exit | Accepted |
 
 ## Targets
 
@@ -75,7 +76,7 @@ The correctness rules are written as invariants in [spec section 4](docs/spec.md
 - [x] API contract ([docs/api.md](docs/api.md))
 - [x] API server, first part: authentication, submit, read one job, claim, heartbeat, report, health check, and the `jobkeys` tool for API keys
 - [x] API server, second part: list jobs (with cursor paging), approve, reject, redrive
-- [ ] Worker and handler contract
+- [x] Worker and handler contract ([ADR 014](docs/adr/014-worker-and-handler-design.md)): handlers, heartbeats, time limit, lost lease, drain on shutdown, and the demo handlers
 - [x] Reaper: takes back expired leases (T12, T13) and escalates overdue approvals (T5), every 5 s, up to 100 jobs of each kind per pass, one transaction per job
 - [ ] Operator page
 - [ ] Load, soak and chaos tests, with results written up
@@ -115,6 +116,14 @@ curl -s -X POST localhost:8080/jobs \
   -d '{"type": "send_email", "payload": {"to": "a@example.com"}}'
 ```
 
+To run a worker as well, use the demo job types (`export JOB_TYPES_FILE=examples/demo-job-types.json` before starting the engine), then:
+
+```
+WORKER_KEY=<the worker key> go run ./cmd/worker              # ENGINE_URL defaults to http://localhost:8080
+```
+
+and submit a job with `"type": "sleep"` and `"payload": {"ms": 300}`. A worker stops cleanly on Ctrl-C (a running handler gets 30 s to finish). If a handler ignores its cancellation the worker exits with status 2 and needs to be restarted; the `stuck` demo type shows this.
+
 The engine speaks plain HTTP. Put it behind a TLS proxy for anything beyond local use ([ADR 013](docs/adr/013-authentication-api-keys.md)).
 
 ## Repository layout
@@ -122,9 +131,11 @@ The engine speaks plain HTTP. Put it behind a TLS proxy for anything beyond loca
 ```
 cmd/
   engine/                    the API server, with the reaper running inside it
+  worker/                    claims jobs and runs the demo handlers
   jobkeys/                   create, list and revoke API keys (needs database access)
 internal/
   api/                       HTTP handlers, authentication, the error shape from docs/api.md
+  worker/                    the handler type, the API client and the run loop (heartbeats, time limit, shutdown)
   reaper/                    the 5-second loop that calls the store's reaper functions
   store/                     all the SQL; the only package that talks to Postgres
   retry/                     the backoff delay from ADR 004
@@ -132,6 +143,8 @@ internal/
   config/                    reads the job-type file
 testutil/                    gives tests a fresh real database
 examples/job-types.json      an example job-type file
+examples/demo-job-types.json the job types for the demo handlers
+examples/handlers/           the demo handlers from spec section 12 (noop, sleep, flaky, always_fail, crash, stuck)
 db/
   schema.sql                 tables, indexes, constraints and triggers
   invariants.sql             the correctness rules as queries that must return zero rows
