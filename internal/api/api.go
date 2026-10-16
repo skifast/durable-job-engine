@@ -1,13 +1,15 @@
 // Package api is the HTTP layer described in docs/api.md.
 //
-// Order of checks on every request: key (401), role (403), request format (400),
-// then the work. The handlers call the store and never write SQL.
+// Order of checks on every request: the route (404 for no such endpoint, 405 for a wrong method),
+// key (401), role (403), request format (400), then the work. The handlers call the store and never write SQL.
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -39,21 +41,50 @@ type API struct {
 // Handler returns the router with the middleware around it.
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", a.healthz)
-	mux.HandleFunc("GET /whoami", a.auth(a.whoami, store.RoleClient, store.RoleWorker, store.RoleOperator))
+	// Every route goes through route, which also remembers which methods each path accepts, so a
+	// request with the wrong method gets a 405 that says what is allowed. The list cannot drift
+	// from the routes, because it is built from them.
+	allowed := map[string][]string{}
+	var order []string
+	route := func(method, path string, h http.Handler) {
+		mux.Handle(method+" "+path, h)
+		if _, seen := allowed[path]; !seen {
+			order = append(order, path)
+		}
+		allowed[path] = append(allowed[path], method)
+		if method == http.MethodGet {
+			allowed[path] = append(allowed[path], http.MethodHead) // a GET route also answers HEAD
+		}
+	}
+	routeFunc := func(method, path string, h http.HandlerFunc) { route(method, path, h) }
+	redirectToPage := func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/", http.StatusFound) }
+
+	routeFunc("GET", "/healthz", a.healthz)
+	routeFunc("GET", "/whoami", a.auth(a.whoami, store.RoleClient, store.RoleWorker, store.RoleOperator))
 	// The operator page: static files that need no key (ADR 015).
-	mux.Handle("GET /ui/", ui.Handler())
-	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/", http.StatusFound) })
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/ui/", http.StatusFound) })
-	mux.HandleFunc("POST /jobs", a.auth(a.submit, store.RoleClient))
-	mux.HandleFunc("GET /jobs/{id}", a.auth(a.getJob, store.RoleClient, store.RoleOperator))
-	mux.HandleFunc("GET /jobs", a.auth(a.listJobs, store.RoleClient, store.RoleOperator))
-	mux.HandleFunc("POST /jobs/{id}/approve", a.auth(a.approve, store.RoleOperator))
-	mux.HandleFunc("POST /jobs/{id}/reject", a.auth(a.reject, store.RoleOperator))
-	mux.HandleFunc("POST /jobs/{id}/redrive", a.auth(a.redrive, store.RoleOperator))
-	mux.HandleFunc("POST /claim", a.auth(a.claim, store.RoleWorker))
-	mux.HandleFunc("POST /jobs/{id}/heartbeat", a.auth(a.heartbeat, store.RoleWorker))
-	mux.HandleFunc("POST /jobs/{id}/report", a.auth(a.report, store.RoleWorker))
+	route("GET", "/ui/", ui.Handler())
+	routeFunc("GET", "/ui", redirectToPage)
+	routeFunc("GET", "/{$}", redirectToPage)
+	routeFunc("POST", "/jobs", a.auth(a.submit, store.RoleClient))
+	routeFunc("GET", "/jobs", a.auth(a.listJobs, store.RoleClient, store.RoleOperator))
+	routeFunc("GET", "/jobs/{id}", a.auth(a.getJob, store.RoleClient, store.RoleOperator))
+	routeFunc("POST", "/jobs/{id}/approve", a.auth(a.approve, store.RoleOperator))
+	routeFunc("POST", "/jobs/{id}/reject", a.auth(a.reject, store.RoleOperator))
+	routeFunc("POST", "/jobs/{id}/redrive", a.auth(a.redrive, store.RoleOperator))
+	routeFunc("POST", "/claim", a.auth(a.claim, store.RoleWorker))
+	routeFunc("POST", "/jobs/{id}/heartbeat", a.auth(a.heartbeat, store.RoleWorker))
+	routeFunc("POST", "/jobs/{id}/report", a.auth(a.report, store.RoleWorker))
+
+	// A path that exists but with another method. A pattern with no method is less specific than
+	// one with a method, so the routes above win for the methods they accept.
+	for _, path := range order {
+		methods := allowed[path]
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Allow", strings.Join(methods, ", "))
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed",
+				"This endpoint does not accept "+r.Method+".", map[string]any{"allow": strings.Join(methods, ", ")})
+		})
+	}
 	// Anything else, as JSON in the same error shape.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "No such endpoint.", nil)
@@ -179,8 +210,7 @@ func bearerToken(r *http.Request) (string, bool) {
 // readBody reads the request body, up to maxBodyBytes. tooLarge is true if there was more.
 func readBody(w http.ResponseWriter, r *http.Request) (body []byte, tooLarge bool, err error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	buf := new(strings.Builder)
-	_, err = copyTo(buf, r.Body)
+	body, err = io.ReadAll(r.Body)
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
@@ -188,7 +218,17 @@ func readBody(w http.ResponseWriter, r *http.Request) (body []byte, tooLarge boo
 		}
 		return nil, false, err
 	}
-	return []byte(buf.String()), false, nil
+	return body, false, nil
+}
+
+// compactLen is the length of the JSON text with no extra whitespace. That is the
+// size the 64 KB limit is measured on (docs/api.md, decision 3).
+func compactLen(raw []byte) (int, error) {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return 0, err
+	}
+	return buf.Len(), nil
 }
 
 func badRequest(w http.ResponseWriter, message string) {

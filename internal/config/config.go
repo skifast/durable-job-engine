@@ -15,6 +15,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,7 +69,7 @@ func Load(path string) (*Config, error) {
 // such as "max_attemps" is caught at startup instead of silently ignored.
 func Parse(b []byte) (*Config, error) {
 	var raw rawConfig
-	dec := json.NewDecoder(bytesReader(b))
+	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("config: %w", err)

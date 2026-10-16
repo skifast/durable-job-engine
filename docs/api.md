@@ -298,6 +298,8 @@ The operator page uses it at sign-in (ADR 015).
 
 | Status | Code | Meaning |
 |---|---|---|
+| 404 | `not_found` | No such endpoint (a path the engine does not have). Checked before the key |
+| 405 | `method_not_allowed` | The path exists but not with this method. The `Allow` header and `details.allow` list the methods that work. Checked before the key |
 | 401 | `unauthorized` | Missing, unknown or revoked key |
 | 403 | `forbidden` | The key's role may not make this call |
 | 500 | `internal_error` | A bug in the engine. Nothing is promised about the state of the request |
