@@ -17,6 +17,7 @@
 --   6  redrive
 --   7  changes the database must refuse
 --   8  each CHECK constraint on its own
+--   8b every state change that is not in spec section 6 is refused (all 36 pairs of states)
 --   9  invariants.sql: clean data gives zero rows, and each invariant catches a planted violation
 --   10 api_keys: constraints, lookup by hash, and revoking (ADR 013)
 
@@ -650,8 +651,101 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- 8b. Every state change that is not in spec section 6 is refused
+-- ---------------------------------------------------------------------------
+-- Spec section 6 allows nine (from, to) pairs of states, listed below from the spec and not
+-- from the trigger. With six states there are 36 pairs, so 27 must be refused. This tries
+-- every one of the 27, which covers the spec's "never happens" list (queued -> succeeded,
+-- waiting_approval -> running, anything out of succeeded or rejected, running -> waiting_approval)
+-- and every other pair too. The trigger's state check runs before the CHECK constraints, so
+-- a refused pair answers with error 23000 whatever else the statement sets.
+DO $$
+DECLARE
+    states  text[] := ARRAY['queued', 'waiting_approval', 'running', 'succeeded', 'dead', 'rejected'];
+    allowed text[] := ARRAY[
+        'waiting_approval>queued',            -- T3  approve
+        'waiting_approval>rejected',          -- T4  reject
+        'waiting_approval>waiting_approval',  -- T5  escalate
+        'queued>running',                     -- T6  claim
+        'running>running',                    -- T7  heartbeat
+        'running>succeeded',                  -- T8  success report
+        'running>queued',                     -- T9, T12  retry after a failure or lease expiry
+        'running>dead',                       -- T10, T11, T13  permanent failure, attempts used up
+        'dead>queued'                         -- T14 redrive
+    ];
+    ids   jsonb := '{}';
+    j     uuid;
+    f     text;
+    t     text;
+    tried integer := 0;
+BEGIN
+    PERFORM pg_temp.reset();
+    ASSERT cardinality(allowed) = 9, 'spec section 6 has nine allowed pairs of states';
+
+    -- One job in each of the six states, each reached by the real changes.
+    ids := ids || jsonb_build_object('queued', pg_temp.new_job('matrix-queued'));
+    ids := ids || jsonb_build_object('waiting_approval', pg_temp.new_job('matrix-waiting', true));
+
+    j := pg_temp.new_job('matrix-running');
+    PERFORM pg_temp.claim_job(j, 'w1');
+    ids := ids || jsonb_build_object('running', j);
+
+    j := pg_temp.new_job('matrix-succeeded');
+    PERFORM pg_temp.claim_job(j, 'w1');
+    UPDATE jobs SET state = 'succeeded', result = '{}', finished_at = now(), lease_owner = NULL, lease_expires_at = NULL WHERE id = j;
+    ids := ids || jsonb_build_object('succeeded', j);
+
+    j := pg_temp.new_job('matrix-dead');
+    PERFORM pg_temp.claim_job(j, 'w1');
+    ASSERT pg_temp.report_failure(j, 'w1', 1, 'permanent', 'x') = 1, 'the job dies';
+    ids := ids || jsonb_build_object('dead', j);
+
+    j := pg_temp.new_job('matrix-rejected', true);
+    UPDATE jobs SET state = 'rejected', decided_by = 'alice', decided_at = now(), decision_reason = 'no', finished_at = now() WHERE id = j;
+    ids := ids || jsonb_build_object('rejected', j);
+
+    FOREACH f IN ARRAY states LOOP
+        ASSERT (SELECT state FROM jobs WHERE id = (ids ->> f)::uuid) = f, 'the test job for ' || f || ' is in that state';
+        FOREACH t IN ARRAY states LOOP
+            IF NOT (f || '>' || t) = ANY (allowed) THEN
+                PERFORM pg_temp.must_fail(f || ' -> ' || t, '23000',
+                    format($q$UPDATE jobs SET state = %L WHERE id = %L$q$, t, (ids ->> f)::uuid));
+                tried := tried + 1;
+            END IF;
+        END LOOP;
+    END LOOP;
+    ASSERT tried = 27, 'all 27 refused pairs were tried (tried ' || tried || ')';
+
+    -- Spec section 6, "never happens": escalating a job that is not waiting_approval. These jobs all
+    -- went through the approval gate, so they have a deadline; escalated_at still cannot be set once
+    -- they have left waiting_approval, whether approved (queued), running, or rejected.
+    j := pg_temp.new_job('matrix-escalate-approved', true);
+    UPDATE jobs SET state = 'queued', decided_by = 'alice', decided_at = now(), run_at = now() WHERE id = j;
+    PERFORM pg_temp.must_fail('escalate an approved (queued) job', '23000',
+        format($q$UPDATE jobs SET escalated_at = now() WHERE id = %L$q$, j));
+    PERFORM pg_temp.claim_job(j, 'w1');
+    PERFORM pg_temp.must_fail('escalate an approved job that is running', '23000',
+        format($q$UPDATE jobs SET escalated_at = now() WHERE id = %L$q$, j));
+    PERFORM pg_temp.must_fail('escalate a rejected job', '23000',
+        format($q$UPDATE jobs SET escalated_at = now() WHERE id = %L$q$, (ids ->> 'rejected')::uuid));
+    ASSERT (SELECT count(*) FROM jobs WHERE escalated_at IS NOT NULL) = 0, 'no refused escalation left a mark';
+
+    -- None of the refused attempts changed anything.
+    FOREACH f IN ARRAY states LOOP
+        ASSERT (SELECT state FROM jobs WHERE id = (ids ->> f)::uuid) = f, 'a refused change left ' || f || ' alone';
+    END LOOP;
+    ASSERT pg_temp.violation_count() = 0, 'part 8b leaves no invariant violations';
+    RAISE NOTICE 'part 8b passed: all 27 state changes outside spec section 6 are refused, and so is escalating a job that is not waiting';
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- 9. invariants.sql: zero rows on good data, and every invariant catches a planted violation
 -- ---------------------------------------------------------------------------
+-- WARNING: this part switches off every trigger on jobs and drops every CHECK and UNIQUE
+-- constraint, to plant violations, and never puts them back (the final ROLLBACK does). Any
+-- part placed after it would run against an unprotected table and could pass for the wrong
+-- reason. Put new tests that rely on the schema's protections BEFORE this part.
 DO $$
 DECLARE
     expected text[] := ARRAY[

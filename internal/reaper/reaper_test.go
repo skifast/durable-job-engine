@@ -264,3 +264,70 @@ func TestTickAndRunStopOnCancel(t *testing.T) {
 }
 
 func sleep() { time.Sleep(50 * time.Millisecond) }
+
+// Spec section 6, "never happens": waiting_approval -> rejected by a timeout. Only an explicit
+// reject call does that. However many times the reaper runs after the deadline, the job stays
+// waiting, nobody is recorded as having decided, and escalated_at is set once and never moves.
+func TestReaperNeverRejectsAnApproval(t *testing.T) {
+	e := newEnv(t)
+	id := e.submit(3, "overdue")
+	r := &reaper.Reaper{Store: e.st, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	var first time.Time
+	for i := 0; i < 5; i++ {
+		r.Tick(context.Background())
+		j := e.job(id)
+		if j.State != "waiting_approval" || j.DecidedBy != nil || j.DecidedAt != nil || j.DecisionReason != nil || j.FinishedAt != nil {
+			t.Fatalf("pass %d: the reaper changed more than escalated_at: state %s, decided_by %v, finished_at %v", i+1, j.State, j.DecidedBy, j.FinishedAt)
+		}
+		if j.EscalatedAt == nil {
+			t.Fatalf("pass %d: an overdue approval was not escalated", i+1)
+		}
+		if i == 0 {
+			first = j.EscalatedAt.Std()
+		} else if !j.EscalatedAt.Std().Equal(first) {
+			t.Fatalf("pass %d: escalated_at moved from %v to %v", i+1, first, j.EscalatedAt.Std())
+		}
+	}
+}
+
+// Spec section 6, "never happens": escalating a job that is not waiting_approval. A job whose
+// deadline has passed but which was approved, rejected, or has since been claimed is left alone,
+// while a waiting job next to them is escalated (so the function does work).
+func TestEscalationSkipsJobsThatAreNotWaiting(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	runningID := e.submit(3, "overdue")
+	approvedID := e.submit(3, "overdue")
+	rejectedID := e.submit(3, "overdue")
+	waitingID := e.submit(3, "overdue")
+
+	// Approve one and claim it at once (it is the only queued job), so it is running.
+	if _, err := e.st.Approve(ctx, runningID, "op1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.claim(); w.ID != runningID {
+		t.Fatalf("claimed %s, want %s", w.ID, runningID)
+	}
+	if _, err := e.st.Approve(ctx, approvedID, "op1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.st.Reject(ctx, rejectedID, "op1", "no"); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := e.st.EscalateOverdueApprovals(ctx, 100)
+	if err != nil || n != 1 {
+		t.Fatalf("escalated %d jobs, want only the one still waiting (err %v)", n, err)
+	}
+	for name, id := range map[string]string{"running": runningID, "approved (queued)": approvedID, "rejected": rejectedID} {
+		if j := e.job(id); j.EscalatedAt != nil {
+			t.Errorf("%s job was escalated", name)
+		}
+	}
+	if e.job(waitingID).EscalatedAt == nil {
+		t.Error("the waiting job was not escalated")
+	}
+	if e.job(runningID).State != "running" || e.job(approvedID).State != "queued" || e.job(rejectedID).State != "rejected" {
+		t.Error("the escalation pass changed a state")
+	}
+}

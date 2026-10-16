@@ -227,6 +227,8 @@ succeeded and rejected are final. dead is final except for an operator redrive (
 
 ### Never happens (write a test for each)
 
+The tests for each case are listed in [never-happens-tests.md](never-happens-tests.md).
+
 - queued → succeeded (skipping running)
 - waiting_approval → running (skipping the approval gate)
 - anything out of succeeded or rejected
