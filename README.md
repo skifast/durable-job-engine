@@ -7,10 +7,10 @@ A background job engine built on Postgres, with worker leases, retries, fencing 
 **The design is done and the database layer is written and tested. The API server (every call in docs/api.md), the reaper and the worker are written and tested; the load, soak and chaos tests have run ([results](docs/load-test-results.md)); and the operator page is written and tested. All roadmap items are done. The engine can also run as several instances behind a load balancer ([ADR 016](docs/adr/016-running-several-engines.md), tested on one laptop).**
 
 - The spec is written ([docs/spec.md](docs/spec.md)).
-- 13 architecture decision records are written and accepted ([docs/adr](docs/adr/README.md)).
+- 16 architecture decision records are written and accepted ([docs/adr](docs/adr/README.md)).
 - Every number (lease, retries, targets, limits) is listed with its reasoning in [docs/metrics-and-settings.md](docs/metrics-and-settings.md).
 - The database schema, the invariant checks and their tests are written ([db](db/README.md)), and the API contract is approved ([docs/api.md](docs/api.md)). The tests drive every state change, try to break each rule, and plant a violation for each of the 20 invariant checks to confirm it is caught.
-- The API server is written in Go ([ADR 012](docs/adr/012-implementation-language.md)). It has every call in the API contract (authentication, submit, read, list, claim, heartbeat, report, approve, reject, redrive), tested end to end against a real Postgres (see [Running it](#running-it)). See the roadmap below for what is left.
+- The API server is written in Go ([ADR 012](docs/adr/012-implementation-language.md)). It has every call in the API contract (authentication, submit, read, list, claim, heartbeat, report, approve, reject, redrive), tested end to end against a real Postgres (see [Running it](#running-it)).
 
 ## What it is designed to do
 
@@ -36,7 +36,7 @@ Operator page  - list, approve, reject, redrive ------┤
                                        Postgres (the jobs table)
 ```
 
-Workers never talk to the database directly (ADR 002). A job moves through six states: `queued`, `waiting_approval`, `running`, `succeeded`, `dead` and `rejected`. All 14 allowed transitions are listed in [spec section 6](docs/spec.md#6-states-and-transitions), and each one will be covered by a test.
+Workers never talk to the database directly (ADR 002). A job moves through six states: `queued`, `waiting_approval`, `running`, `succeeded`, `dead` and `rejected`. All 14 allowed transitions are listed in [spec section 6](docs/spec.md#6-states-and-transitions), and each one is covered by a test.
 
 ## Key design decisions
 
@@ -68,7 +68,9 @@ Workers never talk to the database directly (ADR 002). A job moves through six s
 | Backlog | 100,000 queued jobs without slowing claims (p95 within 2x of an empty queue) |
 | Durability | An acknowledged job survives crashes of the API, workers, reaper and Postgres. It does not survive losing the disk |
 
-The correctness rules are written as invariants in [spec section 4](docs/spec.md#4-invariants). Each one will become a SQL query that must return zero rows after every test run, including runs where workers, the API and Postgres are killed under load.
+All of these targets were met on one laptop; see [the results](docs/load-test-results.md).
+
+The correctness rules are written as invariants in [spec section 4](docs/spec.md#4-invariants). Each one is a SQL query that must return zero rows after every test run, including runs where workers, the API and Postgres are killed under load.
 
 ## Roadmap
 
@@ -153,7 +155,7 @@ cmd/
 internal/
   api/                       HTTP handlers, authentication, the error shape from docs/api.md
   worker/                    the handler type, the API client and the run loop (heartbeats, time limit, shutdown)
-  ui/                        the operator page (plain HTML and JavaScript, embedded in the engine), its Node tests and its browser check
+  ui/                        the operator page (plain HTML and JavaScript, embedded in the engine), its Node tests (test/) and its browser check (e2e/)
   reaper/                    the 5-second loop that calls the store's reaper functions
   store/                     all the SQL; the only package that talks to Postgres
   retry/                     the backoff delay from ADR 004
@@ -167,9 +169,14 @@ db/
   schema.sql                 tables, indexes, constraints and triggers
   invariants.sql             the correctness rules as queries that must return zero rows
   tests/test_schema.sql      tests for the schema and the invariant queries
+  tests/test_duplicate_key_wait.sh  a shell test for duplicate-key waiting
+  README.md                  how to load and check the database layer
 docs/
   spec.md                    the full specification
   api.md                     the API contract: every endpoint, request, response and error code
+  operator-page.md           how to use and test the operator page
+  load-test-results.md       load, soak and chaos test results (raw reports in load-results/)
+  never-happens-tests.md     which tests cover each item on spec section 6's "never happens" list
   metrics-and-settings.md    every number, with reasoning
   adr/                       architecture decision records
 ```
