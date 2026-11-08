@@ -7,7 +7,8 @@
 //	ENGINE_URL   the engine's address (default http://localhost:8080)
 //
 // This build registers the demo handlers in examples/handlers. A real deployment
-// builds its own worker command with its own handlers, using internal/worker.
+// builds its own worker command with its own handlers, using the public worker
+// package (github.com/skifast/durable-job-engine/worker, ADR 017).
 //
 // SIGTERM or Ctrl-C starts a shutdown: no new jobs, and a running handler gets 30 s to
 // finish. If a handler ignores its cancellation the worker exits with status 2, and
@@ -23,7 +24,7 @@ import (
 	"syscall"
 
 	"github.com/skifast/durable-job-engine/examples/handlers"
-	"github.com/skifast/durable-job-engine/internal/worker"
+	"github.com/skifast/durable-job-engine/worker"
 )
 
 func main() {

@@ -20,8 +20,8 @@ import (
 	"github.com/skifast/durable-job-engine/internal/api"
 	"github.com/skifast/durable-job-engine/internal/config"
 	"github.com/skifast/durable-job-engine/internal/store"
-	"github.com/skifast/durable-job-engine/internal/worker"
 	"github.com/skifast/durable-job-engine/testutil"
+	"github.com/skifast/durable-job-engine/worker"
 )
 
 // A real engine API on a real database, with a hook to make requests fail on the way in.

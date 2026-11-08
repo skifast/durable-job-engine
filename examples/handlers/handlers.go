@@ -11,7 +11,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/skifast/durable-job-engine/internal/worker"
+	"github.com/skifast/durable-job-engine/worker"
 )
 
 // All returns the handlers by job type name.
