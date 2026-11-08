@@ -58,6 +58,7 @@ Workers never talk to the database directly (ADR 002). A job moves through six s
 | [014](docs/adr/014-worker-and-handler-design.md) | Worker and handler design: classify by wrapping errors, time limit in the work item, stuck handler makes the worker exit | Accepted |
 | [015](docs/adr/015-operator-page-build.md) | Operator page: plain HTML and JavaScript embedded in the engine and served under /ui/, untrusted text shown as plain text only | Accepted |
 | [016](docs/adr/016-running-several-engines.md) | Running several engines: a DB_MAX_CONNS setting, a reaper in every engine, a load balancer in front, a health check that reads the jobs table | Accepted |
+| [017](docs/adr/017-public-worker-package.md) | The worker package is public, so other repos can build workers | Proposed |
 
 ## Targets
 
@@ -154,7 +155,6 @@ cmd/
   jobkeys/                   create, list and revoke API keys (needs database access)
 internal/
   api/                       HTTP handlers, authentication, the error shape from docs/api.md
-  worker/                    the handler type, the API client and the run loop (heartbeats, time limit, shutdown)
   ui/                        the operator page (plain HTML and JavaScript, embedded in the engine), its Node tests (test/) and its browser check (e2e/)
   reaper/                    the 5-second loop that calls the store's reaper functions
   store/                     all the SQL; the only package that talks to Postgres
@@ -162,6 +162,7 @@ internal/
   canonical/                 RFC 8785 canonical JSON, used for the idempotency hash
   config/                    reads the job-type file
 testutil/                    gives tests a fresh real database
+worker/                      public: the handler type, the API client and the run loop (heartbeats, time limit, shutdown) (ADR 017)
 examples/job-types.json      an example job-type file
 examples/demo-job-types.json the job types for the demo handlers
 examples/handlers/           the demo handlers from spec section 12 (noop, sleep, flaky, always_fail, crash, stuck)
